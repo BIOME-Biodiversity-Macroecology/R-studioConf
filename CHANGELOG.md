@@ -22,7 +22,12 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   only on a still-free node. After 3 deferred nights it logs a journal warning
   (`overdue`). Rollback: `--remove-timer`. Runbook:
   `docs/operations/NODE_MAINTENANCE.md`; tests: `tests/test_biome_node_maintenance.sh`
-  (29 checks, real `flock` and `perl`).
+  (32 checks, real `flock` and `perl`).
+- Found on the calc04 test install (2026-11-03): the "apt busy" check matched
+  the always-on `unattended-upgrade-shutdown` helper (same process name
+  `unattended-upgr`), so every run deferred. It now matches the
+  `unattended-upgrade` command line. A deferred `--force-window` run now says to
+  retry by hand instead of naming a night slot.
 
 ### Fixed (T1 diagnostics — large suspended RStudio session)
 

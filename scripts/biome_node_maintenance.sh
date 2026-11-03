@@ -121,7 +121,12 @@ sessions_active() {  # prints "<rsession> <R>" (same test as biome_pkg_sync.sh)
 }
 
 apt_busy() {  # an apt/dpkg frontend is running (e.g. an operator's manual upgrade)
-  pgrep -x 'apt|apt-get|aptitude|dpkg|unattended-upgr' >/dev/null 2>&1
+  pgrep -x 'apt|apt-get|aptitude|dpkg' >/dev/null 2>&1 && return 0
+  # unattended-upgrade runs under python3 with comm "unattended-upgr". The
+  # always-on unattended-upgrade-shutdown helper (unattended-upgrades.service)
+  # has the same comm, so match the command line instead (calc04, 2026-11-03:
+  # matching the comm deferred every run).
+  pgrep -f '(^|[ /])unattended-upgrade( |$)' >/dev/null 2>&1
 }
 
 pkg_sync_busy() {  # biome_pkg_sync.sh holds its flock for its whole run
@@ -165,6 +170,10 @@ finish() {  # STATUS NOTE EXIT
 # Where a deferred run goes next: the next 15-minute slot, or the next night.
 next_slot_note() {
   local n m
+  if [[ "$FORCE_WINDOW" == true ]]; then
+    echo "run --force-window again later, or wait for the night window"
+    return
+  fi
   n="$(now_hhmm)"; m=$(( 10#${n:0:2} * 60 + 10#${n:2:2} ))
   m=$(( (m / 15 + 1) * 15 ))
   if (( m >= 10#${MAINT_WINDOW_END:0:2} * 60 + 10#${MAINT_WINDOW_END:2:2} )); then

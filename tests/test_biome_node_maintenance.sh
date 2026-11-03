@@ -34,7 +34,19 @@ cat > "$T/bin/pgrep" <<'EOF'
 case "$*" in
   *rsession*) n="$(cat "$STUB_SESS")"; echo "$n"; [[ "$n" -gt 0 ]]; exit ;;
   "-c -x R")  echo "${STUB_R:-0}"; [[ "${STUB_R:-0}" -gt 0 ]]; exit ;;
-  *apt-get*)  [[ "${STUB_APT_BUSY:-0}" == 1 ]]; exit ;;
+  -x*apt-get*)
+    # emulate pgrep -x against process names (comm, 15 chars): the always-on
+    # unattended-upgrade-shutdown helper shows up as "unattended-upgr"
+    comms="unattended-upgr"
+    [[ "${STUB_APT_BUSY:-0}" == 1 ]] && comms+=$'\napt-get'
+    grep -Exq -- "(${*: -1})" <<< "$comms"; exit ;;
+  -f*unattended-upgrade*)
+    # emulate pgrep -f against a process table: the shutdown helper is always
+    # there (unattended-upgrades.service); a real run only with STUB_UU_RUNNING=1
+    procs="/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal"
+    [[ "${STUB_UU_RUNNING:-0}" == 1 ]] && procs+=$'\n/usr/bin/python3 /usr/bin/unattended-upgrade'
+    pat="${*: -1}"
+    grep -Eq -- "$pat" <<< "$procs"; exit ;;
 esac
 echo 0; exit 1
 EOF
@@ -86,7 +98,7 @@ reset_env() {
   rm -rf "$T/state" "$T/systemd" "$T/nr" "$T/log" "$T/sess"
   mkdir -p "$T/state" "$T/systemd" "$T/nr"
   : > "$T/log"; echo 0 > "$T/sess"
-  unset STUB_R STUB_APT_BUSY STUB_SESS_AFTER_UU STUB_UU_RC STUB_KSTA STUB_NR_RSTUDIO STUB_UU_PERIODIC STUB_RESTART_FAIL STUB_APT_TIMER
+  unset STUB_R STUB_APT_BUSY STUB_UU_RUNNING STUB_SESS_AFTER_UU STUB_UU_RC STUB_KSTA STUB_NR_RSTUDIO STUB_UU_PERIODIC STUB_RESTART_FAIL STUB_APT_TIMER
 }
 run() {  # args...
   set +e
@@ -126,6 +138,12 @@ check '[[ $RC -eq 0 ]] && uu_called' "package sync lock file present but free: r
 
 reset_env; STUB_APT_BUSY=1 run
 check '[[ $RC -eq 75 ]] && ! uu_called && [[ "$(report note)" == *"apt/dpkg busy"* ]]' "apt/dpkg busy: deferred"
+reset_env; STUB_UU_RUNNING=1 run
+check '[[ $RC -eq 75 ]] && ! uu_called && [[ "$(report note)" == *"apt/dpkg busy"* ]]' "unattended-upgrade already running: deferred"
+reset_env; run
+check '[[ $RC -eq 0 ]] && uu_called' "always-on unattended-upgrade-shutdown helper does not count as busy"
+reset_env; STUB_APT_BUSY=1 run --force-window
+check '[[ $RC -eq 75 ]] && [[ "$(report note)" == *"run --force-window again later"* ]]' "--force-window deferral names the manual retry, not the night slot"
 
 reset_env; STUB_UU_PERIODIC=0 run
 check '[[ $RC -eq 0 && "$(report status)" == skipped ]] && ! uu_called' "APT::Periodic::Unattended-Upgrade 0 respected: no upgrade"
