@@ -20,6 +20,7 @@ import time
 import asyncio
 import json
 import base64
+import re
 import smtplib
 from email.message import EmailMessage
 
@@ -104,13 +105,37 @@ class HealthResponse(BaseModel):
     status: str = Field(..., examples=["ok"])
     cache_age_s: float = Field(..., examples=[3.1])
 
+_EMAIL_RE = re.compile(r"^[^\s@<>,;\"]+@[^\s@<>,;\"]+\.[^\s@<>,;\"]+$")
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
+
+
+def _login_short(name: str) -> str:
+    return name.split("@", 1)[0].lower()
+
+
 class ProblemReport(BaseModel):
     """Payload for submitting a problem report."""
     message: str
     application: str = Field(default="Biome Portal", description="The application where the report was generated")
-    user_contact: str = Field(default="", description="Optional user contact email")
+    user_contact: str = Field(..., max_length=254, description="Reporter's email (required, used as Reply-To)")
+    portal_user: str = Field(default="", max_length=128, description="Login verified by the portal, as stored in the browser (not authenticated by this API)")
     images: list[str] = Field(default_factory=list, description="List of base64 data URIs for images", max_length=5)
     context: dict = Field(default_factory=dict, description="Additional context info")
+
+    @field_validator("user_contact")
+    @classmethod
+    def check_contact(cls, v):
+        """Required: a report without a way to reach the researcher cannot be followed up."""
+        v = v.strip()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("Please enter your email so the administrator can reply to you.")
+        return v
+
+    @field_validator("portal_user")
+    @classmethod
+    def check_portal_user(cls, v):
+        v = v.strip()
+        return v if _LOGIN_RE.match(v) else ""
 
     @field_validator("images")
     @classmethod
@@ -606,12 +631,24 @@ async def report_problem(report: ProblemReport):
     msg['Subject'] = subject
     msg['From'] = config["SENDER_EMAIL"]
     msg['To'] = ", ".join(admin_emails)
+    msg['Reply-To'] = report.user_contact
 
     sys_snap = await anyio.to_thread.run_sync(_get_system_snapshot, config)
 
+    # The portal login comes from the browser and is not authenticated here:
+    # cross-check it against the users that own an rsession on this host.
+    if report.portal_user:
+        active = {_login_short(u) for u in sys_snap.get("rstudio_users", [])}
+        has_session = _login_short(report.portal_user) in active
+        reporter = (f"{report.portal_user} (from the browser; "
+                    f"{'has' if has_session else 'has NO'} RStudio session on this host)")
+    else:
+        reporter = "unknown (not logged in through the portal)"
+
     body_lines = [
         f"A new problem has been reported from {app_name} on {socket.gethostname()} ({sys_snap['ip']}).",
-        f"User Contact: {report.user_contact if report.user_contact else 'Not provided'}",
+        f"User Contact: {report.user_contact}",
+        f"Portal login: {reporter}",
         "",
         "--- User Message ---",
         report.message,
