@@ -8,6 +8,21 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Changed (problem report: the reporter is always known)
+
+- The "Report a Problem" form requires an email, and `telemetry_api.py`
+  rejects a report without a valid `user_contact` (422). The mail's `Reply-To`
+  is the researcher. On 2026-11-03 a report from biome-calc01 arrived with
+  "User Contact: Not provided" and five RStudio users active, so it could not
+  be followed up.
+- The portal remembers the login it verified with `/auth-check` (cleared on
+  logout); the form pre-fills the email from it and sends it as `portal_user`.
+  The mail shows it, cross-checked against the `rsession` owners on the host.
+  It is not authenticated by the API: a hint, not proof.
+- T2 mirrors T1: same change in `docker-deploy/assets/biome-portal.js`,
+  `docker-deploy/templates/portal_index.html.template` and
+  `docker-deploy/scripts/telemetry/telemetry_api.py`.
+
 ### Added (T1 operations — OS updates only on a free node, ADR-0007)
 
 - `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
