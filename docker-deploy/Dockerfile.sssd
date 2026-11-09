@@ -56,7 +56,7 @@ COPY templates /etc/docker-templates
 RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
 
 # Install Step CLI
-RUN wget -q -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.31.0/step_linux_0.31.0_amd64.tar.gz && \
+RUN wget -q --tries=5 --waitretry=10 --retry-connrefused --retry-on-host-error --timeout=30 -O step.tar.gz https://github.com/smallstep/cli/releases/download/v0.31.0/step_linux_0.31.0_amd64.tar.gz && \
     tar -xf step.tar.gz && \
     mv step_0.31.0/bin/step /usr/local/bin/ && \
     rm -rf step.tar.gz step_0.31.0

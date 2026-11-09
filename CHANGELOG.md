@@ -8,6 +8,15 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Fixed (T2 nightly build: transient step-cli download failure)
+
+- The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
+  and `Dockerfile.nginx` now retries (`wget --tries=5 --waitretry=10
+  --retry-connrefused --retry-on-host-error --timeout=30`). On 2026-11-09 the
+  nightly CI run 387 failed: `wget` exited 4 (network failure) after about
+  2.5 minutes in the rstudio-sssd build, while the identical download in
+  rstudio-samba passed in the same run. T2-only; T1 does not install step-cli.
+
 ### Added (T1 operations — OS updates only on a free node, ADR-0007)
 
 - `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
