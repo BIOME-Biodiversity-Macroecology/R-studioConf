@@ -213,6 +213,58 @@ Exit `1` means medium/unknown drift, `2` high-risk drift, `3` detector failure.
 
 **Verification.** Rerun the detector; exit must be `0`. Then rerun the unchanged script under the same profile and inputs.
 
+### 1.8 RStudio stays on "R is taking longer to start than usual"
+
+**Symptom.** Login succeeds, then the spinner page offers Reload / Safe Mode /
+Terminate R and the session never opens. Network quality (WiFi, VPN) is not the
+cause: RStudio draws this page itself, so the HTTP path already works.
+
+**Likely causes.** A large saved session being restored
+(`suspended-session-data`, written for every open session whenever
+rstudio-server restarts), a large `~/.RData`, or a `~/.Rprofile` that blocks.
+Seen on calc01 on 2026-10-28 (765 MB payload after a needrestart restart).
+
+**Diagnosis.**
+
+```bash
+# the user can try first: "Safe Mode" on that page (no saved environment)
+sudo bash scripts/99_check_rprofile_health.sh --user <user>   # section 7: session state, .RData, .Rprofile
+ps -o pid,stat,etime,rss,cmd -u <user> | grep -E "rsession|PID"
+```
+
+Read-only check of the host protection (WS-1.5) and of what restarted RStudio:
+
+```bash
+cd /home/ladmin/configServices/R-studioConf
+git log --oneline -1; cat /etc/biome-calc/deployed_release 2>/dev/null
+systemctl is-enabled apt-daily-upgrade.timer biome-node-maintenance.timer biome-pkg-sync.timer 2>&1
+cat /etc/needrestart/conf.d/biome-rstudio.conf 2>/dev/null || echo "MISSING: needrestart may restart rstudio-server"
+bash scripts/biome_node_maintenance.sh --status 2>&1 | tail -15
+sudo journalctl -u rstudio-server --since "-14 days" --no-pager | grep -E "Stopping|Started" | tail -20
+sudo journalctl --since "-14 days" --no-pager | grep -iE "needrestart|unattended-upgr|biome-node-maint" | grep -iE "rstudio|restart" | tail -20
+sudo find /nfs/home -maxdepth 8 -type d -name suspended-session-data -path '*rstudio/sessions*' 2>/dev/null \
+  | while read -r d; do printf '%s\t%s\n' "$(sudo du -sh "$d" 2>/dev/null | cut -f1)" "$d"; done | sort -h | tail -15
+```
+
+`apt-daily-upgrade` enabled and no `biome-node-maintenance` timer means the
+protection is not installed. Each Stopping/Started pair suspended every open
+session to NFS.
+
+**Fix.** Kill a hung session with `sudo kill -9 <pid>` (SIGTERM did not stop a
+resuming rsession on 2026-10-28), then the reversible quarantine:
+
+```bash
+sudo bash scripts/99_check_rprofile_health.sh --user <user> --reset-profile          # preview
+sudo bash scripts/99_check_rprofile_health.sh --user <user> --reset-profile --commit
+```
+
+Prevent it: `sudo bash scripts/biome_node_maintenance.sh --install-timer`
+([NODE_MAINTENANCE.md](NODE_MAINTENANCE.md)). A server-side quarantine at
+session start is planned, gated on a confirmed diagnosis (roadmap WS-1.6).
+
+**Verification.** A fresh portal login opens the IDE; `--undo-reset list`
+shows the quarantine to restore the researcher's objects if needed.
+
 ## 2. PAM and password operations
 
 ### 2.1 `passwd` segfaults for a local account

@@ -206,6 +206,37 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
   `/usr/lib/R/site-library`; `bspm::remove_sys("praise")` is denied.
 - Then production hosts one by one; the operator removes both sudo lines.
 
+### WS-1.6: RStudio session hangs at start ("R is taking longer to start than usual")
+
+**Audit** (2026-11-11, report from a researcher on WiFi + VPN; host and user
+pending)
+- The page is drawn by RStudio after login succeeded, so nginx, PAM and the
+  network path worked. What does not start is the user's `rsession`.
+- Known cause on calc01 (2026-10-28, enrico.tordoni): a 765 MB
+  `suspended-session-data` written when needrestart restarted rstudio-server.
+  Other candidates: a large `~/.RData`, a hanging `~/.Rprofile`.
+- Protection in place: WS-1.5 (`biome_node_maintenance.sh`, ADR-0007) stops the
+  restarts that suspend every session. On 2026-11-03 it was installed on calc04
+  only. `99_check_rprofile_health.sh` warns on a suspended payload ≥ 256 MiB.
+- Diagnosis and the read-only protection check:
+  [TROUBLESHOOTING §1.8](../operations/TROUBLESHOOTING.md#18-rstudio-stays-on-r-is-taking-longer-to-start-than-usual).
+
+**Implement** (in this order)
+1. Operator: install WS-1.5 on calc01-03 (`--install-timer`, one host at a time).
+2. **Gated on the diagnosis** (Jfs, 2026-11-11: build nothing until it confirms
+   the cause): an `rsession-path` wrapper (RStudio Server OSS) that moves a
+   suspended payload above a threshold (proposed 1 GiB) to the same reversible
+   quarantine as `--reset-profile`, logs it under `/var/log/biome-*`, tells the
+   researcher in English how to recover it, then starts the real `rsession`.
+   First check on calc04 that `rserver --help` lists `rsession-path`.
+3. Rejected: `session-timeout-suspend=0`. It avoids the payload by discarding
+   the researcher's environment silently.
+
+**Validate**
+- Researcher: Safe Mode starts the session (points to saved state).
+- `99_check_rprofile_health.sh --user <u>`: no session-state WARN after the fix.
+- Journal: no rstudio-server restart outside the maintenance window.
+
 ### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
 
 **Audit**: the open items, in `FUTURE_MIGRATION.md` §T2 gaps:
@@ -287,6 +318,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
 | WS-1.5 OS updates only on a free node, no needrestart restart of rstudio-server (ADR-0007) | Done in PR #53; install on calc04, then calc01-03: **Open: operator** |
 | WS-1.5 align `session-timeout-minutes` (hosts 10080 vs repo 2880) | Open (decision) |
+| WS-1.6 session hangs at start: diagnosis on the reporting host | **Open: operator** (host + health check output) |
+| WS-1.6 `rsession-path` quarantine wrapper | Gated on the diagnosis (Jfs, 2026-11-11) |
 | WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
 | WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
 | WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |

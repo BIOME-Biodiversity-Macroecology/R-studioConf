@@ -8,6 +8,15 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Documentation (RStudio session hangs at start)
+
+- `docs/operations/TROUBLESHOOTING.md` §1.8: "R is taking longer to start than
+  usual" after login. Causes, diagnosis, a read-only check of the host
+  protection (maintenance timer, needrestart exclusion, rstudio-server restarts,
+  suspended sessions) and the reversible fix. Reported 2026-11-11.
+- Roadmap WS-1.6: rollout of ADR-0007 to calc01-03 first; an `rsession-path`
+  quarantine wrapper is gated on a confirmed diagnosis.
+
 ### Fixed (T2 nightly build: transient step-cli download failure)
 
 - The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
