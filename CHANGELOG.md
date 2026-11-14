@@ -20,9 +20,9 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   The name lists now reach awk as files (process substitution), and the
   manifest and report JSON reach jq with `--slurpfile` instead of `--argjson`
   (same limit, reached at roughly 1700 installed packages). No behaviour
-  change otherwise. Test: `tests/test_biome_pkg_sync.sh` S20a-c (9000
+  change otherwise. Test: `tests/test_biome_pkg_sync.sh` S21a-c (9000
   repository names, 6000 installed packages); the old code fails all three.
-  - Impact: T1 only, one script. Risk: low, same plan logic, all 32 test cases pass.
+  - Impact: T1 only, one script. Risk: low, same plan logic, all 38 test cases pass.
   - Deploy: `git pull` on the host; the timer runs the script from the checkout.
   - Rollback: `git revert` of this commit (the sync then fails again as before).
 
