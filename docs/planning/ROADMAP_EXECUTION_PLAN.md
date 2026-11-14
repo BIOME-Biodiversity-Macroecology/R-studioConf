@@ -221,8 +221,17 @@ pending)
 - Diagnosis and the read-only protection check:
   [TROUBLESHOOTING §1.8](../operations/TROUBLESHOOTING.md#18-rstudio-stays-on-r-is-taking-longer-to-start-than-usual).
 
+- Host check 2026-11-14: calc01-03 were unprotected (checkout at `015a1eb`,
+  `apt-daily-upgrade.timer` enabled, no needrestart exclusion). rstudio-server
+  restarted between 06:27 and 06:47 on 11-05, 11-12, 11-13 (calc01), 11-13,
+  11-14 (calc02) and 11-13 (calc03), at the time of `apt-daily-upgrade`
+  (inferred from the timestamps). calc04, protected, had one 1 s restart at
+  03:30. Largest suspended payloads on the shared home: 1.3 GB, 862 MB, 500 MB
+  (one user).
+
 **Implement** (in this order)
-1. Operator: install WS-1.5 on calc01-03 (`--install-timer`, one host at a time).
+1. Operator: install WS-1.5 on calc01-03. **Done 2026-11-14** (pull to
+   `45becfb`, `--install-timer`).
 2. **Gated on the diagnosis** (Jfs, 2026-11-11: build nothing until it confirms
    the cause): an `rsession-path` wrapper (RStudio Server OSS) that moves a
    suspended payload above a threshold (proposed 1 GiB) to the same reversible
@@ -316,7 +325,7 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-1.3 version alignment tool (`fix_r_pkg_versions_inplace.sh`) | Done in PR; run per host: **Open: operator** |
 | WS-1.3 nightly sync `biome_pkg_sync.sh` (ADR-0004 step 4) | Done in PR (CI S1-S18); setup on biome-store03 + dry-run nights: **Open: operator** |
 | WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
-| WS-1.5 OS updates only on a free node, no needrestart restart of rstudio-server (ADR-0007) | Done in PR #53; install on calc04, then calc01-03: **Open: operator** |
+| WS-1.5 OS updates only on a free node, no needrestart restart of rstudio-server (ADR-0007) | Done in PR #53; installed on calc04 2026-11-03 and calc01-03 2026-11-14 |
 | WS-1.5 align `session-timeout-minutes` (hosts 10080 vs repo 2880) | Open (decision) |
 | WS-1.6 session hangs at start: diagnosis on the reporting host | **Open: operator** (host + health check output) |
 | WS-1.6 `rsession-path` quarantine wrapper | Gated on the diagnosis (Jfs, 2026-11-11) |
