@@ -8,6 +8,83 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Fixed (T2 nightly build: transient step-cli download failure)
+
+- The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
+  and `Dockerfile.nginx` now retries (`wget --tries=5 --waitretry=10
+  --retry-connrefused --retry-on-host-error --timeout=30`). On 2026-11-09 the
+  nightly CI run 387 failed: `wget` exited 4 (network failure) after about
+  2.5 minutes in the rstudio-sssd build, while the identical download in
+  rstudio-samba passed in the same run. T2-only; T1 does not install step-cli.
+
+### Added (T1 operations — OS updates only on a free node, ADR-0007)
+
+- `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
+  systemd/needrestart templates. On biome-calc01 on 2026-10-28 at 06:26 the stock
+  `apt-daily-upgrade.timer` upgraded libbrotli, and needrestart restarted
+  rstudio-server. That suspended every session and wrote each session's R
+  environment to NFS; one 765 MB environment locked a researcher out.
+  `--install-timer`, in place and idempotent, does three things: needrestart
+  never restarts rstudio-server; `apt-daily-upgrade.timer` is replaced by a
+  15-minute timer that upgrades only 03:30-05:00 and only with no
+  `rsession`/`R` process, the package sync idle and apt idle; rserver is restarted
+  only on a still-free node. After 3 deferred nights it logs a journal warning
+  (`overdue`). Rollback: `--remove-timer`. Runbook:
+  `docs/operations/NODE_MAINTENANCE.md`; tests: `tests/test_biome_node_maintenance.sh`
+  (32 checks, real `flock` and `perl`).
+- Found on the calc04 test install (2026-11-03): the "apt busy" check matched
+  the always-on `unattended-upgrade-shutdown` helper (same process name
+  `unattended-upgr`), so every run deferred. It now matches the
+  `unattended-upgrade` command line. A deferred `--force-window` run now says to
+  retry by hand instead of naming a night slot.
+
+### Fixed (T1 diagnostics — large suspended RStudio session)
+
+- `scripts/99_check_rprofile_health.sh` 2.0 → 2.1: section 7e only compared the
+  total `~/.local/share/rstudio/sessions` size with 1 GiB, so a 765 MB
+  `suspended-session-data/environment` (769 MiB in total) was reported PASS on
+  biome-calc01 on 2026-10-28. That file kept the user's login on "Loading…" in a
+  Terminate/resume loop. Now any single suspended payload ≥256 MiB is a WARN, and
+  the action plan offers the reversible `--reset-profile --commit`. Regression
+  cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
+
+### Changed (repository moved to the BIOME organisation)
+
+- The repository moved from `gsamuele78/R-studioConf` to
+  `BIOME-Biodiversity-Macroecology/R-studioConf` on 2026-10-28. Clone URLs
+  (README, installation guide), the telemetry systemd unit `Documentation=`
+  link, "authoritative source" links in architecture/SharePoint docs and the
+  Infra-Iam-PKI consumer URL in `.ai/project.yml` now use the new owner.
+  Workflows and Dependabot need no change: they hard-code no owner.
+- Hosts: run `git remote set-url` once per checkout
+  ([operator quickstart](docs/operations/OPERATOR_QUICKSTART.md#repository-location)).
+  `40_install_telemetry.sh` already installed units keep the old link until
+  the script is re-run; that link only feeds `systemctl status` and redirects.
+
+### Fixed (T2 nightly build: GitHub API rate limit)
+
+- The nightly canary build of `rstudio-sssd` failed on 2026-10-28 (CI run 328)
+  with `HTTP error 403 ... API rate limit exceeded` from
+  `remotes::install_github()`: unauthenticated GitHub API calls are capped at 60
+  per hour per IP, and GitHub-hosted runners share IPs. The same commit had built
+  fine on 2026-10-27. Nothing in the code changed; the failure depends on who
+  else used the runner IP.
+- `docker-deploy/Dockerfile.sssd` and `Dockerfile.samba`: the package install
+  step reads an optional BuildKit secret `github_pat` and exports it as
+  `GITHUB_PAT` for that step only. `docker-compose.yml` declares the secret from
+  the `GITHUB_PAT` environment variable of the shell running the build. Unset or
+  empty, the build runs unauthenticated exactly as before.
+- `.github/workflows/ci.yml`: the nightly monster build passes the workflow's
+  `GITHUB_TOKEN` as `GITHUB_PAT` (authenticated limit).
+- Checked with a local BuildKit build in three cases (variable unset, empty,
+  set): all three build, the step sees the token only when set, and the token is
+  absent from `docker history` and from the final image (`/run/secrets` does not
+  exist after the step).
+- T1 note, not changed here: `config/r_env_manager.conf` defines `GITHUB_PAT=""`
+  but `r_env_manager.sh` never exports it to the `Rscript` that runs
+  `install_github()`, so setting it on a host has no effect. Hosts have their own
+  IPs, so the limit is much less likely there.
+
 ### Changed (T2 telemetry-api on Python 3.14)
 
 - `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →
@@ -106,8 +183,35 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   R X.Y (never touched). `--rollback DIR` reinstalls the old version. Tested by
   `tests/test_fix_r_version.sh` (R1-R14, stubbed apt/dpkg/R) in `t1-static`.
   Decision (Jfs, 2026-10-27): 4.6.0 from calc01 to calc03 only; moving the pin to
-  4.6.1 is a later, separate change (a newly built host cannot install 4.6.0
-  from the repository).
+  4.6.1 is a later, separate change.
+
+### Fixed (R core upgrade breaks compiled packages; applied on biome-calc03)
+
+- Applied on biome-calc03, 2026-10-27: R 4.5.3 → 4.6.0. The load test caught
+  136 of 446 packages that stopped loading: R 4.6 removed `SETLENGTH` from the C
+  API, and the installed `r-cran-rlang` 1.1.7 and `r-cran-data.table` 1.18.2.1
+  builds called it; everything importing rlang failed with them. Fixed on the
+  host with `scripts/fix_r_pkg_versions_inplace.sh --commit
+  --accept-partial-rollback` (174 `r-cran-*` upgrades, rlang 1.3.0, data.table
+  1.18.6.1; only 19 old builds were still downloadable, the others were the
+  broken ones). Measured after: 449/450 packages load; the one failure
+  (`loadeR`) failed before the upgrade too. Researchers were not affected: no
+  session ran during the change.
+- `scripts/fix_r_version_inplace.sh`: on a minor-version change (4.5 → 4.6) the
+  plan now upgrades every installed `r-cran-*` package that has a newer
+  repository build in the same apt transaction as R, so this cannot happen
+  again on another host. `--core-only` keeps the old behaviour, with a warning.
+- The load test prints one progress line per batch (the first run looked hung
+  for minutes), and the commit is refused (exit 3, host unchanged) when the
+  baseline loads no package, because then nothing can be measured.
+- The user-library warning counts only non-empty libraries. On calc03 it
+  reported "11 users with packages for 4.5 only"; all 11 directories were empty.
+- `--debs DIR` now says when the repository offers the same version: on
+  calc03 apt installed 4.6.0-2.2404.0 from cloud.r-project.org rather than from
+  DIR. The morning's reading of `apt-cache policy` (4.6.0 no longer offered) was
+  wrong; the runbook is corrected. The apt index is refreshed with `--debs` too.
+- Tests: `tests/test_fix_r_version.sh` R1-R17 (new: the r-cran rebuild in the
+  plan and its rollback, `--core-only`, empty baseline, patch-level change).
 
 ## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
 
