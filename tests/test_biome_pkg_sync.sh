@@ -291,6 +291,24 @@ SYNC_DIR="" run --init-dir relative/path
 if [[ $RC -eq 2 ]]; then pass "S20c init-dir with a relative path → 2"; else fail "S20c (rc=$RC): $OUT"; fi
 unset RUN_SUT; rm -rf "$WS"
 
+# S20 name lists larger than one argument may be (128 KiB): on 2026-11-14 --plan
+# failed on biome-calc04 with "awk: Argument list too long"
+big() { local i; for i in $(seq 1 "$1"); do printf 'r-cran-zz%05dfillerfillerfiller\t1.0-1\n' "$i"; done; }
+setup; big 9000 >> "$T/repo.tsv"
+[[ "$(cut -f1 "$T/repo.tsv" | wc -c)" -gt 262144 ]] || fail "S20 fixture too small to prove anything"
+MODE=dry-run run --plan
+if [[ $RC -eq 0 ]] && ! grep -q 'Argument list too long' <<<"$OUT" && grep -q 'r-cran-mlr3' <<<"$OUT" \
+   && grep -q 'r-cran-ranger' <<<"$OUT" && [[ "$(installs)" -eq 0 ]]; then
+  pass "S20a plan with 9000 package names in the repository → works"; else fail "S20a (rc=$RC): $(tail -5 <<<"$OUT")"; fi
+big 6000 >> "$T/state.tsv"; sort -o "$T/state.tsv" "$T/state.tsv"
+NOW=1200 run
+if [[ $RC -eq 0 ]] && [[ "$(jq '.apt | length' "$T/sync/hosts/biome-calc04.json")" -eq 6002 ]]; then
+  pass "S20b manifest with 6002 installed packages published"; else fail "S20b (rc=$RC): $(tail -5 <<<"$OUT")"; fi
+run
+if [[ $RC -eq 0 ]] && has r-cran-mlr3 && [[ "$(rep '.status')" == "done" ]] \
+   && [[ "$(rep '.installed_or_planned | length')" -eq 3 ]] && [[ "$(rep '.not_in_apt[0].package')" == "r-cran-gone" ]]; then
+  pass "S20c apply with large lists → installed, report written"; else fail "S20c (rc=$RC): $(rep . | head -20) $(tail -5 <<<"$OUT")"; fi
+
 # S18 usage errors
 setup; run --bogus
 if [[ $RC -eq 2 ]]; then pass "S18a unknown argument → 2"; else fail "S18a rc=$RC"; fi

@@ -8,6 +8,24 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Fixed (T1 package sync: "Argument list too long" in the plan step)
+
+- `scripts/biome_pkg_sync.sh` failed in the plan step on the hosts with
+  `line 198: /usr/bin/awk: Argument list too long` (exit 126, seen on
+  biome-calc04 on 2026-11-14 with `--plan`). The list of every `r-cran-*` name
+  in the apt repositories was passed to awk as one `-v` argument, and Linux
+  limits one argument to 128 KiB. The manifest was published before the
+  failure, so `--status` kept working while the nightly plan after 03:30 could
+  not run: no plan, no report, nothing installed, in `dry-run` and in `apply`.
+  The name lists now reach awk as files (process substitution), and the
+  manifest and report JSON reach jq with `--slurpfile` instead of `--argjson`
+  (same limit, reached at roughly 1700 installed packages). No behaviour
+  change otherwise. Test: `tests/test_biome_pkg_sync.sh` S20a-c (9000
+  repository names, 6000 installed packages); the old code fails all three.
+  - Impact: T1 only, one script. Risk: low, same plan logic, 31 test cases pass.
+  - Deploy: `git pull` on the host; the timer runs the script from the checkout.
+  - Rollback: `git revert` of this commit (the sync then fails again as before).
+
 ### Fixed (T2 nightly build: transient step-cli download failure)
 
 - The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
