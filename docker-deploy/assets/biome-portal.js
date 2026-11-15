@@ -255,7 +255,8 @@
                 return;
             }
             var contact = emailInput.value.trim();
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+            // Same rule as _EMAIL_RE in telemetry_api.py.
+            if (!/^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(contact)) {
                 alert('Please enter your email so the administrator can reply to you.');
                 emailInput.focus();
                 return;

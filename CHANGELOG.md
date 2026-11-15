@@ -18,7 +18,10 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
 - The portal remembers the login it verified with `/auth-check` (cleared on
   logout); the form pre-fills the email from it and sends it as `portal_user`.
   The mail shows it, cross-checked against the `rsession` owners on the host.
-  It is not authenticated by the API: a hint, not proof.
+  It is not authenticated by the API: a hint, not proof, and the mail says
+  "NOT verified". Logout, or a login by a different user on the same browser,
+  clears the saved contact, so a report never carries the previous person's
+  email.
 - T2 mirrors T1: same change in `docker-deploy/assets/biome-portal.js`,
   `docker-deploy/templates/portal_index.html.template` and
   `docker-deploy/scripts/telemetry/telemetry_api.py`.

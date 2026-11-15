@@ -640,8 +640,8 @@ async def report_problem(report: ProblemReport):
     if report.portal_user:
         active = {_login_short(u) for u in sys_snap.get("rstudio_users", [])}
         has_session = _login_short(report.portal_user) in active
-        reporter = (f"{report.portal_user} (from the browser; "
-                    f"{'has' if has_session else 'has NO'} RStudio session on this host)")
+        reporter = (f"{report.portal_user} (NOT verified: sent by the browser, anyone can type it; "
+                    f"a user with this name {'has' if has_session else 'has NO'} RStudio session on this host)")
     else:
         reporter = "unknown (not logged in through the portal)"
 
