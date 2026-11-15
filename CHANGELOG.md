@@ -8,6 +8,16 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Changed (T2 upstream image pins, applied by hand from Dependabot #56 and #57)
+
+- `docker-deploy/docker-compose.yml`: `curlimages/curl` 8.22.0 → 8.23.0
+  (`rstudio-init`). `docker-deploy/Dockerfile.nginx`: `nginx` 1.31.0-alpine →
+  1.31.7-alpine. `docker-deploy/Dockerfile.ollama`: `ollama/ollama` 0.35.1 →
+  0.40.15. The agent files were regenerated with `.ai/generate.sh`, which the
+  bot cannot do (ROADMAP WS-0.2, default B), so its own PRs stay red on
+  `generate.sh --check`. T2-only: no T1 host file changes. Rollback: revert
+  this commit and rebuild the three images.
+
 ### Fixed (T2 nightly build: transient step-cli download failure)
 
 - The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
