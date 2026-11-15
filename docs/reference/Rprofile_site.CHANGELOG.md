@@ -8,6 +8,222 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11-fix3 (2026-10-20) — "review fixes: sidecar ties, ranger guard idempotence"
+
+### Trigger
+
+Code review of PR #35 (v12.11-fix2), after its merge.
+
+### Fix
+
+- Fragment 50: the parquet sidecar is used only when it is strictly newer than
+  the text file. Equal mtimes are treated as stale: on a filesystem with
+  coarse timestamps a CSV rewritten in the same tick as its sidecar tied with
+  it and the old table came back. Cost: a sidecar written in the same tick as
+  its CSV is ignored and the CSV is read (slower, correct). Message is now
+  `BIOME-IO: ignoring stale parquet sidecar (not newer than <file>)`.
+- Dispatcher ranger guard: it recognises its own trace by the guard's message
+  text instead of treating any trace as its own. Profile sourced twice: still
+  one guard. A trace someone else put on `ranger::ranger` (a user debugging):
+  the guard is not installed, because `trace()` would replace and silently drop
+  that trace; the user's `untrace()` plus a new session restores the guard.
+- Not changed: the review also said data-only calls (no target) bypass the
+  guard. ranger 0.16.0 has no such interface: `ranger(data = X, mtry = 10)`
+  stops with ranger's own `Please give formula, dependent variable name or x/y.`
+  Test G12 records that.
+
+No `RPROFILE_VERSION` bump (same rule as fix / fix2).
+
+### Verification
+
+`tests/test_parquet_sidecar_gate.sh` P9 (equal mtime rejected) and
+`tests/test_ranger_mtry_guard.sh` G10 (idempotent), G11 (foreign trace kept),
+G12 (data-only call). Negative test: with `t_pq < t_src` P9 fails; with the
+old any-trace check G11 fails.
+
+### Deploy
+
+Same as v12.11-fix2: `sudo ./scripts/50_setup_nodes.sh`, option 3. New R
+sessions only.
+
+---
+
+## v12.11-fix2 (2026-10-15) — "Smart I/O never returns a stale parquet sidecar"
+
+### Trigger
+
+A researcher on biome-calc01 renamed columns, saved with
+`write.csv(occ_prot2, "data/occurrences/dol_geo_cleandup_lich.csv")`, and
+`read.csv()` on the same path kept returning the old columns with
+`BIOME-IO: Using .parquet accelerator (read.csv -> arrow)`. Their workaround,
+`utils::read.csv`, works because the wrapper replaces only the attached
+`package:utils` binding, not the namespace export.
+
+### Root cause
+
+`50_pkg_hooks.R` replaced the CSV with `<file>.parquet` whenever that file
+existed. Nothing in BIOME-CALC writes the sidecar, so once a user (or an old
+script) created it, it never followed later edits of the CSV. The same check
+also ignored every reader argument (`sep=";"`, `header=FALSE`, `colClasses=`),
+returned a tibble instead of a `data.frame`, and skipped `check.names`.
+
+### Fix
+
+One gate, `.biome_parquet_sidecar(path, n_extra_args)`, used by both the
+`read.csv` and `fread` wrappers. The sidecar is used only when all hold:
+interactive session; no extra reader arguments; sidecar mtime >= text file
+mtime; `getOption("biome.parquet_sidecar", TRUE)`. A stale sidecar is skipped
+with a message. The `read.csv` path returns `as.data.frame()` with
+`make.names(unique = TRUE)`; `fread` returns `as.data.table()`. No
+RPROFILE_VERSION bump: behaviour-restoring (`read.csv(f)` returns `f`).
+
+### Verification
+
+`tests/test_parquet_sidecar_gate.sh`: S1 both wrappers use the gate, S2 no
+ungated check left, P1–P8 gate behaviour including P3 (stale sidecar, the bug)
+and P8 (the reported read → write.csv → read sequence). Negative test: on the
+previous fragment S1, S2 and P0 fail.
+
+### Also in v12.11-fix2: ranger mtry guard (dispatcher)
+
+Same report: mlr3 tuning with `mtry = p_int(1, 11)` on a spatial task with 9
+predictors. ranger stops (`mtry can not be larger than number of variables`),
+prints that only on the worker's stdout, and returns
+`User interrupt or internal error.`. A `packageEvent("ranger", "onLoad")` hook,
+placed before the worker/full-profile branch, `trace()`s `ranger::ranger` and
+stops first with an English message naming mtry, the predictor count and the
+fix. It checks `dependent.variable.name` + `data` and `x`/`y` calls (mlr3 uses
+the former); formula calls are not checked. It never changes `mtry`: Jfs chose a
+clear error over auto-correction (2026-10-15) so results always match the code.
+`trace()` keeps formals, environment and the recorded `$call`. Rollback in a
+session: `untrace(ranger::ranger)`; opt-out:
+`options(biome.ranger_mtry_guard = FALSE)`. Tests:
+`tests/test_ranger_mtry_guard.sh`; negative test on the previous dispatcher
+fails S1 and G0.
+
+### Deploy
+
+`sudo ./scripts/50_setup_nodes.sh` on every host, then
+`grep -c 'biome_parquet_sidecar' /etc/R/Rprofile_site.d/50_pkg_hooks.R` → `5`.
+New R sessions only. T2 is not affected by this change (TD-T2-01).
+
+Test host biome-calc04, 2026-10-20 (option 3 from this branch, v12.11): the
+deploy validated v12.11 and the three greps returned 5 / 5 / 2. As a domain
+user: `ranger(..., mtry = 10)` on iris stopped with
+`BIOME-CALC: ranger mtry = 10 but the data has only 4 predictor(s)` and
+`mtry = 2` ran. In RStudio Web: a stale sidecar was skipped (`"new"`), a fresh
+one was used and returned `data.frame`, `sep = ","` bypassed it, and
+`install.packages("praise")` went through bspm's D-Bus service.
+Caught on the way: calc04's checkout was on the July branch
+`setwd_safe_regression` (v12.10); option 3 from there re-deployed
+`bspm.sudo = TRUE` and broke installs until the bspm hotfix was re-applied.
+
+---
+
+## v12.11-fix (2026-10-15) — "bspm without sudo" (ADR-0005)
+
+Section 0 of the dispatcher no longer sets `bspm.sudo = TRUE`. bspm is enabled
+with `bspm.sudo = FALSE` and only when
+`/usr/share/dbus-1/system-services/org.r_project.linux1.service` exists, so
+installs go through bspm's root D-Bus service (policy: install allowed for
+`domain_users`, remove denied). Without the service, bspm stays off and
+`install.packages()` builds into the personal library. No `RPROFILE_VERSION`
+bump: the user-visible behaviour (binary installs from RStudio Web) is unchanged
+on hosts with the service. Live hosts: `scripts/fix_bspm_dbus_inplace.sh`.
+
+## v12.11-fix (2026-10-12) — "safe_setwd survives rm(list=ls(all.names=TRUE))"
+
+### Trigger
+
+A researcher cleaning their session with `rm(list = ls(all.names = TRUE))`
+followed by any `setwd(...)` hit:
+
+```
+Error in setwd(dir) : could not find function ".biome_original_setwd"
+```
+
+The `60_safe_setwd.R` guard wraps `base::setwd`. The wrapper's success path
+called `.biome_original_setwd(dir)` as a **bare symbol resolved through
+globalenv**. `.biome_original_setwd` is `assign()`-ed into globalenv (line 32)
+so the cross-fragment consumer `80_tools_ext.R` can read it — but a user
+purging globalenv with `all.names = TRUE` removes the dot-prefixed binding,
+and the wrapper then cannot resolve its own delegate.
+
+### Root cause
+
+The closure captured a perfectly good local binding `original_fn`
+(`get("setwd", envir = asNamespace("base"))`, line 31) but never used it on
+the success path, reaching into globalenv instead. This is an implementation
+defect, not a documented design choice — it diverges from the
+`.biome_env` + closure-capture pattern used by the Smart I/O wrappers in
+`50_pkg_hooks.R`.
+
+### Fix
+
+`templates/Rprofile_site.d/60_safe_setwd.R.template` line 77:
+
+```r
+-    .biome_original_setwd(dir)
++    original_fn(dir)
+```
+
+`original_fn` is captured in the `safe_setwd` closure at definition time and
+cannot be removed by `rm()` on globalenv. The globalenv `assign()` of
+`.biome_original_setwd` is **retained** for the `80_tools_ext.R` consumer,
+which already degrades gracefully (`setwd(compile_dir)` fallback) when the
+binding is absent. No RPROFILE_VERSION bump: behaviour-restoring fix to an
+existing fragment; no version-drift assertion triggered.
+
+### Verification
+
+New regression suite `tests/test_safe_setwd_rm_regression.sh` (harness) +
+`tests/fixtures/test_safe_setwd_rm_regression.R` (T1–T9):
+
+* T3 — `setwd()` after `rm(list=ls())` (non-dot) → PASS
+* T4 — `setwd()` after `rm(list=ls(all.names=TRUE))` (the bug) → PASS
+* T5 — Martina-gate still hard-fails on missing path in batch mode → PASS
+* T6 — `.biome_original_setwd` still present in globalenv for `80_tools_ext` → PASS
+* T9 — `80_tools_ext` fallback works after `rm(all.names=TRUE)` → PASS
+
+All 9 runtime tests + the 16-template parse gate green.
+
+### Deployment gap (operator action required)
+
+The fix is committed to the template but the **running host(s) still execute the
+stale `/etc/R/Rprofile_site.d/60_safe_setwd.R`** (verified on `biome-calc01`:
+`grep` shows the deployed file still calls `.biome_original_setwd(dir)` on the
+success path). Until the fragment is re-rendered and re-deployed via
+`scripts/50_setup_nodes.sh`, researchers who `rm(list = ls(all.names = TRUE))`
+will keep hitting the error on the next `setwd()` (including the implicit
+`setwd()` RStudio issues around project/source operations, which is why it
+surfaced on a `write.csv(...)` line). **Redeploy fragment 60 to clear it.**
+
+### Defense-in-depth: same bug class swept across the kernel
+
+A full audit of `Rprofile_site.d/` for the "wrapper delegates through a
+globalenv `.biome_*` binding" pattern (the exact failure mode) found:
+
+* `05_thread_guard.R` (`detectCores`), `55_options_guard.R` (`options`),
+  `50_pkg_hooks.R` (`read.csv`/`fread`) — **already safe**: each captures its
+  original via a `local()` closure and only copies to globalenv for forensics.
+  Verified empirically (`tests/fixtures/test_wrapper_rm_survival.R` W2/W3).
+* `35_compile_routing.R` (`compileNimble`) — **was conditionally vulnerable**:
+  the wrapper read the original back with
+  `get(".biome_original_compileNimble", envir = save_store)` where `save_store`
+  falls back to `globalenv()` when `.biome_env` is absent, and resolved
+  `.biome_get_compile_dir` as a bare globalenv symbol. Both would break after
+  `rm(all.names = TRUE)` in a profile without `.biome_env`. **Hardened** to
+  closure-capture (`.ref` + `.resolve_dir`) mirroring the 50/60 contract, with
+  an `exists()`-guarded live-lookup fallback and a fail-fast `stop()` if the
+  reference is genuinely lost. The globalenv `assign()` is retained for
+  forensic recovery only.
+
+Empirical proof of the pattern (isolated repro): a closure-captured original
+survives `rm(list = ls(all.names = TRUE))`; a `get(..., envir = globalenv())`
+delegate raises `object '...' not found`.
+
+---
+
 ## v12.11 (2026-10-07) — "TrueNAS home quota visible to users"
 
 ### Trigger
