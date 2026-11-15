@@ -5,7 +5,7 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/DEVOPS_TROUBLESHOOTING_GUIDE.md
-last_verified: 2026-10-28
+last_verified: 2026-11-15
 ---
 
 # DevOps Troubleshooting Guide
@@ -42,7 +42,7 @@ Walk the layers top-down. Stop at the first layer that is not healthy and open t
 | 2 | Authentication | Did PAM/winbind accept the login? | `sudo journalctl -u rstudio-server --since '-1 hour' --no-pager \| grep -i <user>`; `sudo grep -i <user> /var/log/auth.log \| tail` | `granted access` / `session opened`; no `Error converting userIdentifier to username` (that line with a value like `name@domain` means the user typed an e-mail address instead of the username) | [Runbook §2](TROUBLESHOOTING.md#2-pam-and-password-operations), §3 |
 | 3 | Home storage | Is the home mounted, writable, under quota? | `findmnt -T /nfs/home/<user>`; `sudo bash scripts/99_troubleshoot_env.sh --storage --test-user <user>` | nfs4 mount, 1 MiB+fsync write OK | [Runbook §4.2](TROUBLESHOOTING.md#42-nfs-home-is-unavailable-stale-or-slow), [§4.4](TROUBLESHOOTING.md#44-writes-to--fail-with-disk-quota-exceeded-but-df-shows-free-space) |
 | 4 | rsession process | Is there an `rsession`, and what is it doing? | `pgrep -u <user> -a rsession`; `ps -o pid,etime,stat,%cpu,rss -p <pid>` | none (fresh login) or `S`, low CPU | §4 of this guide |
-| 5 | Session state | Is RStudio trying to resume a large/corrupt suspended session? | `sudo bash scripts/99_check_rprofile_health.sh --user <user>` (section 7); `sudo -u <user> sh -c 'find ~/.local/share/rstudio/sessions/active -path "*suspended-session-data*" -type f -printf "%s %p\n" \| sort -n \| tail'` | small state, no suspended payload | [Runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-after-a-suspended-session) |
+| 5 | Session state | Is RStudio trying to resume a large/corrupt suspended session? | `sudo bash scripts/99_check_rprofile_health.sh --user <user>` (section 7); `sudo -u <user> sh -c 'find ~/.local/share/rstudio/sessions/active -path "*suspended-session-data*" -type f -printf "%s %p\n" \| sort -n \| tail'` | small state, no suspended payload | [Runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-or-r-is-taking-longer-to-start-than-usual) |
 | 6 | R profile | Does the system/user R startup load cleanly? | same health check, sections 1–9 | `VERDICT` clear | [Runbook §1.1](TROUBLESHOOTING.md#11-rstudio-login-loops-or-session-failed-to-start), [§8.1](TROUBLESHOOTING.md#81-welcome-bannerguardstools-are-missing) |
 | 7 | Crash history | Did the session crash (OOM, SIGSEGV) rather than hang? | `sudo bash scripts/99_postmortem_forensics.sh --user <user> --hours 72 --output /tmp/pm_<user>.txt` | no OOM/signal entries | [Runbook §1.2](TROUBLESHOOTING.md#12-r-session-exits-with-sigsegv-during-matrix-work), [§1.3](TROUBLESHOOTING.md#13-r-session-is-oom-killed-or-exits-137) |
 | 8 | Host event | What happened on the host at the time the problem started? | §5 of this guide | no service stop, no NFS errors | §5 |
@@ -71,7 +71,7 @@ Use these to judge what a command prints. "Source" says where the number comes f
 | Tool / check | Value | Level |
 |---|---|---|
 | `99_check_rprofile_health.sh` §7, RStudio state total | ≥ 1 GiB | WARN |
-| `99_check_rprofile_health.sh` §7, single suspended payload | ≥ 256 MiB | WARN — health 2.1, [PR #53](https://github.com/gsamuele78/R-studioConf/pull/53) (open); health 2.0 on main does not check it |
+| `99_check_rprofile_health.sh` §7, single suspended payload | ≥ 256 MiB | WARN (health 2.1; health 2.0 did not check it) |
 | `99_check_rprofile_health.sh` §7, `~/.RData` restored at login (`load_workspace=true`) | any size / ≥ 1 GiB | WARN / FAIL |
 | `99_check_rprofile_health.sh` §7, user session start | > 5 s and > 2 s over the system baseline / > 30 s | WARN / FAIL |
 | `99_check_rprofile_health.sh` §9, system profile load | > 2 s "moderate" / > 5 s "slow" | WARN (a fresh bundle usually brings it under 1 s) |
@@ -132,7 +132,7 @@ Ask the user to confirm that the IDE shows the Console prompt. CPU at 100% for m
 Known limits (2026-10-28):
 
 - `99_postmortem_forensics.sh` does not filter the journal by user and does not check home quota or writability. Its section-4 `FIX:` line suggests `mv ~/.local/share/rstudio ...`: do **not** run it as root on NFS and do not run it while the rsession is alive. Use the ladder below or `--reset-profile`.
-- Health 2.0 (on main) reported PASS for 769 MiB of state because it only compared the total with 1 GiB. Health 2.1 ([PR #53](https://github.com/gsamuele78/R-studioConf/pull/53)) adds the 256 MiB per-payload check.
+- Health 2.0 reported PASS for 769 MiB of state because it only compared the total with 1 GiB. Health 2.1 (merged 2026-11-03, PR #53) adds the 256 MiB per-payload check.
 
 ### 4.1 Escalation ladder (least invasive first)
 
@@ -221,7 +221,7 @@ sudo dmesg -T | grep -iE 'nfs|lockd|lease' | tail -20
 
 A `Stopping rstudio-server.service` line that follows an `apt-daily-upgrade.service` start within seconds means unattended-upgrades upgraded a library used by rserver and needrestart restarted the service. The `Consumed ... memory peak` line shows how much memory the sessions held at that moment.
 
-**Prevention:** [ADR-0007 and `scripts/biome_node_maintenance.sh`](https://github.com/gsamuele78/R-studioConf/pull/53) (PR #53, open) stop needrestart from restarting rstudio-server and run OS upgrades only 03:30–05:00 on a node with no R sessions. Until it is merged and installed (`--install-timer`, one host at a time), any unattended upgrade of an rserver library can repeat this incident on any node.
+**Prevention:** [ADR-0007](../adr/0007-os-updates-only-on-a-free-node.md) and `scripts/biome_node_maintenance.sh` ([`NODE_MAINTENANCE.md`](NODE_MAINTENANCE.md)) stop needrestart from restarting rstudio-server and run OS upgrades only 03:30–05:00 on a node with no R sessions. Installed on calc04 on 2026-11-03 and on calc01–calc03 on 2026-11-14. Until then calc01–calc03 stayed on an old checkout and `apt-daily-upgrade` kept restarting rstudio-server around 06:27–06:47 (5, 12, 13 and 14 November), so the same suspend happened again. Check a node with `bash scripts/biome_node_maintenance.sh --status` and the read-only commands in [runbook §1.8](TROUBLESHOOTING.md#18-rstudio-stays-on-loading-or-r-is-taking-longer-to-start-than-usual).
 
 ## 6. Worked example: biome-calc01, 2026-10-28
 
@@ -243,8 +243,7 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 | 10:20 | payload gone from the session dir; health check 63/63 PASS, session state 1.3 MiB; backup checked as the user: `environment` 802068873 bytes (`du` 296M, ZFS compression) | health check, `sudo -u <u> sh -c 'ls; du'` |
 | 10:23 | rsession still alive 1 h 09 min after SIGTERM: `Sl`, 0.4% CPU, RSS 1.6 GB unchanged; no `abnormal` in the journal. Resume finished, session waiting for a browser (step 2b) | `ps`, `journalctl` |
 | afternoon | user A still cannot get in: logins accepted (`granted access`) but no new `Reading rsession configuration` line in the rsession log, because rserver kept routing them to the old, idle rsession | journal, `~/.local/share/rstudio/log/rsession-<user>.log` |
-| evening | old rsession stopped with `kill -9` | operator shell |
-| pending | user A logs in with one tab | §3.4 |
+| 18:29 | old rsession stopped with `kill -9`; the next login can start a fresh rsession. The user's own confirmation of the login was not recorded | operator shell |
 
 ### 6.2 What each check showed
 
@@ -252,7 +251,7 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 |---|---|---|
 | Authentication (journal) | `granted access` at every login | not an identity problem |
 | Home (health check §7, `df`) | writable, 22% used, no `~/.RData` | not storage or quota |
-| Health check (v2.0) | 62 PASS, 1 WARN (profile load 2.1 s); §7 "RStudio session state: 769.1 MiB" **PASS** | tool gap → health 2.1 in PR #53 |
+| Health check (v2.0) | 62 PASS, 1 WARN (profile load 2.1 s); §7 "RStudio session state: 769.1 MiB" **PASS** | tool gap → fixed in health 2.1 (PR #53) |
 | Session dir sizes (`du`, `find -size +20M`) | one 765 MiB `suspended-session-data/environment` | **cause** |
 | `--reset-profile` dry-run | would move 770 MB; `BLOCKED: rsession running` | the guard worked as designed |
 | Child process of the rsession | `R --vanilla ... .rs.getPackageInformation('DALEXtra','data.table',...,'tidyverse')` | RStudio package indexing after resume; extra load, not the cause |
@@ -271,8 +270,8 @@ A researcher (called *user A* here) reported that RStudio no longer opened on bi
 
 | Item | Status |
 |---|---|
-| Health check must warn on a large suspended payload | [PR #53](https://github.com/gsamuele78/R-studioConf/pull/53), health 2.1 (open) |
-| No rstudio-server restart by needrestart; OS upgrades only on a free node (ADR-0007) | [PR #53](https://github.com/gsamuele78/R-studioConf/pull/53) (open) |
+| Health check must warn on a large suspended payload | Done: health 2.1, PR #53 merged 2026-11-03 |
+| No rstudio-server restart by needrestart; OS upgrades only on a free node (ADR-0007) | Done: PR #53 merged 2026-11-03; timer on calc04 2026-11-03, calc01–calc03 2026-11-14 |
 | Large sessions: session state on local disk, in-session RSS warning, nightly report (ADR-0008) | Proposed, not yet a PR; point 1 (state on local disk) **not verified**. An earlier test found that `XDG_*` variables exported in `rsession-profile` did not move RStudio state on OSS ([`rstudio_session_isolation.md`](rstudio_session_isolation.md) §2); the ADR now tests a `rsession-path` wrapper on calc04 and drops point 1 if that fails |
 | Align `session-timeout-minutes` on the hosts (10080) with the repo (2880) | decision pending |
 | `99_postmortem_forensics.sh` §4 `FIX:` hint (root `mv`, no rsession stop) | open; use §4.1 instead |
