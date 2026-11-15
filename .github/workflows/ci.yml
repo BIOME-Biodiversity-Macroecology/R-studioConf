@@ -27,6 +27,8 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'CHANGELOG.md'
   pull_request:
     paths:
       - 'scripts/**'
@@ -41,6 +43,8 @@ on:
       - 'docker-deploy/**'
       - 'kubernetes-deploy/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'CHANGELOG.md'
   workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'   # 01:00 UTC — only trigger that runs t2-build-monsters
@@ -79,6 +83,12 @@ jobs:
       - name: Exec-bit guard (launcher visibility)
         run: bash tests/check_exec_bits.sh
 
+      - name: Release notes from CHANGELOG.md (ADR-0006, used by release.yml)
+        run: bash tests/test_release_notes.sh
+
+      - name: Step 8 deployed-release stamp + downgrade guard (ADR-0006)
+        run: bash tests/test_deploy_release_guard.sh
+
       - name: T2/T3 self-contained contract (vendored by Infra-Iam-PKI)
         # docker-deploy/ and kubernetes-deploy/ are copied byte-for-byte by the
         # Infra-Iam-PKI sync; they must not reach into the repo root.
@@ -88,6 +98,37 @@ jobs:
         # Deterministic; writes only under mktemp, stubs service detection — no
         # apt/systemd/AD needed. Guards T1 audit §1 items 1-4 against regression.
         run: bash tests/test_pr1_critical_fixes.sh
+
+      - name: bspm D-Bus hotfix (ADR-0005; policy, apply, idempotency, rollback, refusals)
+        run: bash tests/test_fix_bspm_dbus.sh
+
+      - name: In-place R core upgrade to the pinned version (export, plan, commit, load test, rollback)
+        run: bash tests/test_fix_r_version.sh
+
+      - name: bspm D-Bus policy on a real dbus-daemon (who may install/remove)
+        # Loads the rendered policy into a private dbus-daemon with the distro
+        # default policy; root needed to run calls as throwaway users.
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends dbus-daemon python3-gi
+          sudo bash tests/test_bspm_dbus_policy_live.sh
+
+      - name: Cross-host package drift check (ADR-0004)
+        # Fake library trees under mktemp; reproduces calc01-vs-calc04 drift.
+        run: bash tests/test_pkg_host_drift.sh
+
+      - name: In-place r-cran-* version alignment (ADR-0004 step 3)
+        # apt-get/dpkg-query/pgrep/id stubbed on PATH; never touches apt or /var.
+        run: bash tests/test_fix_r_pkg_versions.sh
+
+      - name: Nightly R package sync across hosts (ADR-0004 step 4)
+        # apt/dpkg/pgrep/systemctl stubbed; shared dir and fix script are fakes under mktemp.
+        run: bash tests/test_biome_pkg_sync.sh
+
+      - name: OS updates only on a free node (ADR-0007)
+        # pgrep/systemctl/unattended-upgrade/needrestart/apt stubbed; real flock and perl.
+        run: bash tests/test_biome_node_maintenance.sh
 
       - name: Root-guard contract (non-root must refuse, not silently run)
         run: |
@@ -152,6 +193,12 @@ jobs:
         run: bash tests/login_rlibs_hotfix_test.sh
       - name: Wrapper rm-survival (safe_setwd + compileNimble after rm(all.names=TRUE))
         run: bash tests/test_safe_setwd_rm_regression.sh
+      - name: Smart I/O parquet sidecar gate (stale / arg-incompatible sidecar never returned)
+        run: bash tests/test_parquet_sidecar_gate.sh
+      - name: Install ranger (binary, public RSPM) for the mtry guard suite
+        run: Rscript -e 'install.packages("ranger"); stopifnot(requireNamespace("ranger", quietly = TRUE))'
+      - name: ranger mtry guard (clear error in session and PSOCK workers, mtry never changed)
+        run: bash tests/test_ranger_mtry_guard.sh
 
   # ── Nginx: render templates and validate with `nginx -t` ───────────────────
   nginx-config:
@@ -231,6 +278,11 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
           df -h /
       - name: Build ${{ matrix.service }}
+        # Authenticated GitHub API calls for the R GitHub package installs: the
+        # shared runner IP hit the 60/hour unauthenticated limit (run 328,
+        # rstudio-sssd, HTTP 403). Passed as a BuildKit secret, not a build arg.
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
         run: docker compose -f docker-deploy/docker-compose.yml --env-file docker-deploy/.env.ci build ${{ matrix.service }}
 
   # ── R package manifest shape (cheap drift guard) ───────────────────────────
