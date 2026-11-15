@@ -234,7 +234,7 @@ sudo journalctl -u rstudio-server --since '-1 day' --no-pager | grep -iE "$U|abn
 
 Then find what suspended the session (idle timeout or service restart): [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](DEVOPS_TROUBLESHOOTING_GUIDE.md) §5. Values to judge the outputs (sizes, `ps` states, timeouts) are in §3 of the same guide. Health 2.1 warns when one suspended payload is ≥256 MiB or the total state is ≥1 GiB. Other causes with the same symptom, also reported in section 7: a large `~/.RData` restored at login, or a `~/.Rprofile` that blocks.
 
-Read-only check of the host protection (ADR-0007, installed on all four nodes on 2026-11-14) and of what restarted RStudio:
+Read-only check of the host protection (ADR-0007, installed on calc04 on 2026-11-03 and on calc01–calc03 on 2026-11-14) and of what restarted RStudio:
 
 ```bash
 cd /home/ladmin/configServices/R-studioConf
@@ -243,6 +243,10 @@ systemctl is-enabled apt-daily-upgrade.timer biome-node-maintenance.timer biome-
 cat /etc/needrestart/conf.d/biome-rstudio.conf 2>/dev/null || echo "MISSING: needrestart may restart rstudio-server"
 bash scripts/biome_node_maintenance.sh --status 2>&1 | tail -15
 sudo journalctl -u rstudio-server --since "-14 days" --no-pager | grep -E "Stopping|Started" | tail -20
+# largest suspended payloads on the whole fleet (shared NFS homes); if root is squashed
+# on a home the line is missing, so check single users with the commands above
+sudo find /nfs/home -maxdepth 8 -type d -name suspended-session-data -path '*rstudio/sessions*' 2>/dev/null \
+  | while read -r d; do printf '%s\t%s\n' "$(sudo du -sh --apparent-size "$d" 2>/dev/null | cut -f1)" "$d"; done | sort -h | tail -15
 ```
 
 `apt-daily-upgrade` enabled and no `biome-node-maintenance` timer means the protection is not installed: run `sudo bash scripts/biome_node_maintenance.sh --install-timer` ([`NODE_MAINTENANCE.md`](NODE_MAINTENANCE.md)). Each Stopping/Started pair suspended every open session to NFS. A restart at 03:30–05:00 with no sessions open is the timer doing its job.
@@ -258,7 +262,7 @@ Objects from a moved payload can be reloaded with `load()` into a `new.env()`, o
 
 Do not run the `FIX: mv ~/.local/share/rstudio ...` line printed by `99_postmortem_forensics.sh` as root on NFS or while the rsession is alive.
 
-**Verification.** `sudo -u "$U" ls "$D"` no longer lists `suspended-session-data`; the health check shows no session-state warning; at the next login (one tab) the rsession is in state `S` with stable RSS, the journal has no new "terminated abnormally", the rsession log has a new `Reading rsession configuration` line for this login, and the user sees the Console prompt (guide §3.4). A journal line `Error converting userIdentifier to username` with an e-mail-like value means the user typed an e-mail address instead of the username. Prevention of forced suspends by unattended upgrades: [ADR-0007](../adr/0007-os-updates-only-on-a-free-node.md), [`NODE_MAINTENANCE.md`](NODE_MAINTENANCE.md).
+**Verification.** `sudo -u "$U" ls "$D"` no longer lists `suspended-session-data`; the health check shows no session-state warning; at the next login (one tab) the rsession is in state `S` with stable RSS, the journal has no new "terminated abnormally", the rsession log has a new `Reading rsession configuration` line for this login, and the user sees the Console prompt (guide §3.4). After step 3, `sudo bash scripts/99_check_rprofile_health.sh --user "$U" --undo-reset list` shows the quarantine, to restore the user's objects if needed. A journal line `Error converting userIdentifier to username` with an e-mail-like value means the user typed an e-mail address instead of the username. Prevention of forced suspends by unattended upgrades: [ADR-0007](../adr/0007-os-updates-only-on-a-free-node.md), [`NODE_MAINTENANCE.md`](NODE_MAINTENANCE.md).
 
 ## 2. PAM and password operations
 
