@@ -114,6 +114,12 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 3. WS-0.3: CI `setup-r` reads its R version from the single source of truth
    (`scripts/pin_r_version.sh DEFAULT_R_VERSION`) instead of a literal. Expect fallout:
    some fixtures may behave differently on 4.6. Fix them in T1 tests, never by pinning CI back.
+4. WS-0.4: Versioned releases (ADR-0006). `CHANGELOG.md` gets one section per
+   `vYYYY.MM.N` tag; every in-place hotfix and every host redeploy is recorded in
+   `docs/operations/HOTFIX_REGISTER.md`. First release `v2026.10.0` (Rprofile
+   v12.11-fix3). Release `v2026.10.1`: Step 8 writes `/etc/biome-calc/deployed_release`
+   and refuses an older or diverged checkout unless `--allow-downgrade` (rollback).
+   Next: a read-only drift check that compares the stamps across hosts.
 
 **Validate**
 - `make generate-check` and `.ai/validate.sh --ci` are green on `main`.
@@ -140,6 +146,65 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
 - A researcher session: `rm(list = ls(all.names = TRUE)); setwd(tempdir())` → no error.
 - CI: `tests/test_safe_setwd_rm_regression.sh` green. It was proven to fail with the
   fix reverted (T4/T9 FAIL), so it is a real regression guard.
+
+- WS-1.2 **v12.11-fix2 (Smart I/O stale parquet sidecar).** Reported 2026-10-15 on
+  biome-calc01: `read.csv()` returned a stale `<file>.parquet`. Fixed in fragment 50
+  with a freshness / no-extra-args gate and `tests/test_parquet_sidecar_gate.sh`.
+  Same redeploy as WS-1.1. Test host calc04 passed 2026-10-20 (sidecar, ranger
+  guard, bspm install from RStudio Web).
+- Hosts' checkouts are not on `main` (calc04 was on `setwd_safe_regression`,
+  v12.10, with local config edits). A Step 8 redeploy from a stale checkout
+  regresses fixes. **Open:** check each host's branch before any redeploy; move
+  local values to `config/site/setup_nodes.site.vars.conf`.
+- Triage, not a defect: `ranger` "User interrupt or internal error" under mlr3
+  (same report) is `mtry` above `task$n_features` in the user's search space.
+  Reproduced on ranger 0.16.0. Documented in COMMON_PROBLEMS §15. The dispatcher
+  now raises a clear English error before ranger runs (session and PSOCK workers);
+  it never changes `mtry` (HC-17, decision by Jfs 2026-10-15). Open: package
+  versions on the researcher's other server, to explain why it ran there.
+
+### WS-1.3: Cross-host R package drift (ADR-0004)
+
+**Audit**
+- 2026-10-15: `biome-calc01` has mlr3 1.8.0 / mlr3spatiotempcv 2.3.5 in
+  `/usr/lib/R/site-library`, `biome-calc04` has neither; future 1.76.0 vs 1.70.0.
+  Cause: bspm installs into the local system library of one host only.
+
+**Implement**
+1. `scripts/99_check_pkg_host_drift.sh` (read-only snapshot + compare). Done.
+2. Run it on every host; record the drift count as the baseline metric. Done 2026-10-15:
+   426 of 690 packages drift (246 missing, 180 version); calc03 runs R 4.5.3, not the 4.6.0 pin.
+3. `scripts/fix_r_pkg_versions_inplace.sh`: align versions in place, one host at a
+   time, test host first (closes most of the 180 version mismatches). calc03 must
+   first move to R 4.6.0 (`scripts/pin_r_version.sh`).
+4. Nightly per-host sync `scripts/biome_pkg_sync.sh` (manifests on biome-store03,
+   JSON, timer every 15 min, changes 03:30-05:00, only without R sessions); test host first (ADR-0004 step 4,
+   runbook `docs/operations/PKG_SYNC.md`).
+
+**Validate**
+- CI: `tests/test_pkg_host_drift.sh` reproduces the calc01-vs-calc04 case.
+- Hosts: drift count `0` after each reconcile run.
+
+### WS-1.4: bspm installs without sudo (ADR-0005)
+
+**Audit** (2026-10-15, on the hosts)
+- Step 7 writes `NOPASSWD` sudo on `apt-get`/`apt-mark`/`dpkg`/`bspm.py` for
+  `%domain_users`: root for every domain user. Narrowing to `bspm.py` is root too
+  (`-o FILE` append as root). Every host also has a manual `%domain_users ALL=(ALL) ALL`.
+- With sudo removed, `install.packages()` fails (no personal-library fallback).
+- bspm's D-Bus service ships with the package but is not registered.
+
+**Implement**
+1. `scripts/fix_bspm_dbus_inplace.sh` (in place, dry-run/commit/rollback).
+2. Template section 0: `bspm.sudo = FALSE`, enable only when the service exists.
+3. Step 7 registers the service; no more sudoers rule.
+
+**Validate**
+- CI: `tests/test_fix_bspm_dbus.sh`.
+- Test host: hotfix `--commit`; as a domain user without sudo, from RStudio Web and
+  `setsid -w Rscript ... < /dev/null`, `install.packages("praise")` lands in
+  `/usr/lib/R/site-library`; `bspm::remove_sys("praise")` is denied.
+- Then production hosts one by one; the operator removes both sudo lines.
 
 ### WS-2: T2 parity with T1 (`MIGRATION_IN_PROGRESS`)
 
@@ -206,9 +271,27 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | Open-PR triage (#12, #13, #14, #23) | Done in this PR |
 | WS-1.1 v12.11-fix code + CI guard | Done in this PR |
 | WS-1.1 host redeploy | **Open: operator** (needs M1) |
+| WS-1.2 v12.11-fix2 parquet sidecar gate + ranger guard + CI guard | Done (PR #35, merged 2026-10-20) |
+| WS-1.2 v12.11-fix3 review fixes (sidecar ties, guard idempotence) | Done (PR #41) |
+| WS-1.1 + WS-1.2 host redeploy (Step 8, release `v2026.10.0`) | Done on calc01-04 2026-10-20 (all on `main` @ 6157e27; greps 1/5/2) |
+| WS-0.4 versioned releases + hotfix register (ADR-0006) | Done (PR #41); release workflow tags `v2026.10.0` on merge of its PR |
+| WS-0.4 Step 8 writes the deployed tag; refuse older template | Done (PR #43, release `v2026.10.1`, deployed on calc01-04 2026-10-20); `--allow-downgrade` for rollback |
+| WS-0.4 drift check reading the stamps of all hosts | Open |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |
+| WS-1.3 cross-host drift check (ADR-0004 step 1) | Done in PR (tool + CI test) |
+| WS-1.3 drift baseline on every host | Done 2026-10-15: 426/690 packages drift; calc03 on R 4.5.3 (ADR-0004) |
+| WS-1.3 version alignment tool (`fix_r_pkg_versions_inplace.sh`) | Done in PR; run per host: **Open: operator** |
+| WS-1.3 nightly sync `biome_pkg_sync.sh` (ADR-0004 step 4) | Done in PR (CI S1-S18); setup on biome-store03 + dry-run nights: **Open: operator** |
+| WS-1.3 calc03 to the pinned R 4.6.0 | Open (needed before the sync applies on calc03) |
+| WS-1.5 OS updates only on a free node, no needrestart restart of rstudio-server (ADR-0007) | Done in PR #53; install on calc04, then calc01-03: **Open: operator** |
+| WS-1.5 align `session-timeout-minutes` (hosts 10080 vs repo 2880) | Open (decision) |
+| WS-1.4 bspm D-Bus service + profile + Step 7 (ADR-0005) | Done (PR #38) |
+| WS-1.4 hotfix on test host, then production hosts | **Applied** on calc01-04 2026-10-19; install/remove check passed on all four |
+| WS-1.4 remove both domain_users sudo lines | **Applied** on calc01-04 2026-10-19 (`sudo -l -U` confirms) |
+| T2 telemetry-api on Python 3.14 + hashed lock + healthcheck fix (TD-T2-08) | Done (PR #44); unblocks Dependabot #47 |
+| TD-T2-08 pin T1 telemetry venv to the same lock | Open |
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |
