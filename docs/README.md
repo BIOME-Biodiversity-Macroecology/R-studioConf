@@ -79,6 +79,7 @@ Descriptions state each file's role. They do not imply that every document has p
 
 - [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — day-2 quick reference.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — periodic maintenance schedule and procedures.
+- [`HOTFIX_REGISTER.md`](operations/HOTFIX_REGISTER.md) — in-place hotfixes, the release that absorbs each, and what each host runs (ADR-0006).
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — diagnostic and repair-tool index.
 - [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — HC-13 diagnostic ladder for unchanged user R scripts.
@@ -105,6 +106,11 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`TEMPLATE_GALLERY.md`](reference/TEMPLATE_GALLERY.md) — template inventory and examples.
 - [`NGINX_AUTH_BACKENDS.md`](reference/NGINX_AUTH_BACKENDS.md) — SSSD versus Samba/Winbind Nginx/PAM integration.
 - [`Rprofile_site.CHANGELOG.md`](reference/Rprofile_site.CHANGELOG.md) — Rprofile version history required by HC-14.
+
+### Planning (`planning/`)
+
+- [`ROADMAP_EXECUTION_PLAN.md`](planning/ROADMAP_EXECUTION_PLAN.md) — live roadmap execution plan: ordered work streams (audit → implement → validate), ADR-style decisions, open-PR triage record.
+- [`PROJECT_MAP_CONSOLIDATION_PLAN.md`](planning/PROJECT_MAP_CONSOLIDATION_PLAN.md) — approved, not yet executed brief (work stream WS-3 of the roadmap plan): archive `next_gen/`, MADR ADR system, triage-prune dead code, deepen tests. Records the "do NOT rewrite T1 to Python" verdict.
 
 The repository-wide change history is [`../CHANGELOG.md`](../CHANGELOG.md).
 

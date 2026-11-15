@@ -5,6 +5,9 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ## [Unreleased]
 
+New entries go here; they move into a release section when the release is
+tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
+
 ### Added (ADR-0002, ADR-0003: measurement and in-place host update)
 
 - `docs/adr/0002-measure-before-adopting.md`: every change that claims an improvement
@@ -16,6 +19,400 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
   validator, `--rollback`); one hotfix contract (`--check` default, idempotent,
   same-PR template fix + convergence test) and absorption by the next PATCH.
   Pre-registered metrics M1–M7. Docs only; no script changes.
+
+### Fixed (T2 nightly build: transient step-cli download failure)
+
+- The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
+  and `Dockerfile.nginx` now retries (`wget --tries=5 --waitretry=10
+  --retry-connrefused --retry-on-host-error --timeout=30`). On 2026-11-09 the
+  nightly CI run 387 failed: `wget` exited 4 (network failure) after about
+  2.5 minutes in the rstudio-sssd build, while the identical download in
+  rstudio-samba passed in the same run. T2-only; T1 does not install step-cli.
+
+### Added (T1 operations — OS updates only on a free node, ADR-0007)
+
+- `scripts/biome_node_maintenance.sh` with `config/node_maintenance.vars.conf` and
+  systemd/needrestart templates. On biome-calc01 on 2026-10-28 at 06:26 the stock
+  `apt-daily-upgrade.timer` upgraded libbrotli, and needrestart restarted
+  rstudio-server. That suspended every session and wrote each session's R
+  environment to NFS; one 765 MB environment locked a researcher out.
+  `--install-timer`, in place and idempotent, does three things: needrestart
+  never restarts rstudio-server; `apt-daily-upgrade.timer` is replaced by a
+  15-minute timer that upgrades only 03:30-05:00 and only with no
+  `rsession`/`R` process, the package sync idle and apt idle; rserver is restarted
+  only on a still-free node. After 3 deferred nights it logs a journal warning
+  (`overdue`). Rollback: `--remove-timer`. Runbook:
+  `docs/operations/NODE_MAINTENANCE.md`; tests: `tests/test_biome_node_maintenance.sh`
+  (32 checks, real `flock` and `perl`).
+- Found on the calc04 test install (2026-11-03): the "apt busy" check matched
+  the always-on `unattended-upgrade-shutdown` helper (same process name
+  `unattended-upgr`), so every run deferred. It now matches the
+  `unattended-upgrade` command line. A deferred `--force-window` run now says to
+  retry by hand instead of naming a night slot.
+
+### Fixed (T1 diagnostics — large suspended RStudio session)
+
+- `scripts/99_check_rprofile_health.sh` 2.0 → 2.1: section 7e only compared the
+  total `~/.local/share/rstudio/sessions` size with 1 GiB, so a 765 MB
+  `suspended-session-data/environment` (769 MiB in total) was reported PASS on
+  biome-calc01 on 2026-10-28. That file kept the user's login on "Loading…" in a
+  Terminate/resume loop. Now any single suspended payload ≥256 MiB is a WARN, and
+  the action plan offers the reversible `--reset-profile --commit`. Regression
+  cases are in `tests/rprofile_health_test.sh`. Docs: `docs/operations/DIAGNOSTICS_INDEX.md`.
+
+### Changed (repository moved to the BIOME organisation)
+
+- The repository moved from `gsamuele78/R-studioConf` to
+  `BIOME-Biodiversity-Macroecology/R-studioConf` on 2026-10-28. Clone URLs
+  (README, installation guide), the telemetry systemd unit `Documentation=`
+  link, "authoritative source" links in architecture/SharePoint docs and the
+  Infra-Iam-PKI consumer URL in `.ai/project.yml` now use the new owner.
+  Workflows and Dependabot need no change: they hard-code no owner.
+- Hosts: run `git remote set-url` once per checkout
+  ([operator quickstart](docs/operations/OPERATOR_QUICKSTART.md#repository-location)).
+  `40_install_telemetry.sh` already installed units keep the old link until
+  the script is re-run; that link only feeds `systemctl status` and redirects.
+
+### Fixed (T2 nightly build: GitHub API rate limit)
+
+- The nightly canary build of `rstudio-sssd` failed on 2026-10-28 (CI run 328)
+  with `HTTP error 403 ... API rate limit exceeded` from
+  `remotes::install_github()`: unauthenticated GitHub API calls are capped at 60
+  per hour per IP, and GitHub-hosted runners share IPs. The same commit had built
+  fine on 2026-10-27. Nothing in the code changed; the failure depends on who
+  else used the runner IP.
+- `docker-deploy/Dockerfile.sssd` and `Dockerfile.samba`: the package install
+  step reads an optional BuildKit secret `github_pat` and exports it as
+  `GITHUB_PAT` for that step only. `docker-compose.yml` declares the secret from
+  the `GITHUB_PAT` environment variable of the shell running the build. Unset or
+  empty, the build runs unauthenticated exactly as before.
+- `.github/workflows/ci.yml`: the nightly monster build passes the workflow's
+  `GITHUB_TOKEN` as `GITHUB_PAT` (authenticated limit).
+- Checked with a local BuildKit build in three cases (variable unset, empty,
+  set): all three build, the step sees the token only when set, and the token is
+  absent from `docker history` and from the final image (`/run/secrets` does not
+  exist after the step).
+- T1 note, not changed here: `config/r_env_manager.conf` defines `GITHUB_PAT=""`
+  but `r_env_manager.sh` never exports it to the `Rscript` that runs
+  `install_github()`, so setting it on a host has no effect. Hosts have their own
+  IPs, so the limit is much less likely there.
+
+### Changed (T2 telemetry-api on Python 3.14)
+
+- `docker-deploy/Dockerfile.telemetry`: base image `python:3.11-slim` →
+  `python:3.14-slim`. The 2024 pins (FastAPI 0.111, pydantic 2.7.4) cannot build
+  on 3.14 (`pydantic-core` 2.7.4 has no cp314 wheel and fails to compile), which
+  kept Dependabot PRs #33/#40 red. Dependencies now come from a pinned, hashed
+  lock `docker-deploy/scripts/telemetry/requirements.txt` (FastAPI 0.142.2,
+  pydantic 2.13.5, Starlette 1.7.0, uvicorn 0.54.0; no release younger than two
+  weeks), installed with `--require-hashes --only-binary=:all:`. gcc and
+  python3-dev are gone from the image: there is no apt step left.
+- `telemetry_api.py` (T1 and T2 copies, identical change): `Field(example=...)`
+  → `Field(examples=[...])`. The old form is deprecated in pydantic 2 and is removed
+  in v3. T1 hosts install unpinned latest packages, so they already emitted these
+  warnings. The new form works on every pydantic 2.x.
+- Measured in a local container, main (3.11, old pins) → this change (3.14, lock):
+  the `/api/v1/status` key set and `/metrics` series are identical; `/api/v1/health`
+  p50 0.90 → 1.02 ms (200 calls); startup to first healthy 1.55 → 1.40 s; RSS
+  46.1 → 46.3 MiB; the invalid `report-problem` payload is still rejected with 422;
+  startup warnings 12 → 0 lines. Image 289 → 225 MB (the baseline was built without
+  its gcc layer, so main's real image is bigger than 289 MB).
+
+### Fixed (T2 telemetry-api healthcheck)
+
+- The compose healthcheck called `curl`, which `python:*-slim` does not ship
+  (`sh: curl: not found`, exit 127), so `telemetry_api` could never be healthy.
+  It now probes `/api/v1/health` with the image's own Python. T1 (systemd) and
+  T3 (`httpGet` probe) are not affected.
+
+### Fixed (package sync: shared directory check on TrueNAS)
+
+- `biome_pkg_sync.sh --check-dir` now fails when an NFSv4 ACL entry gives write
+  to anyone but the owner (needs `nfs4_getfacl`), and also tries to write as
+  `PKG_SYNC_TEST_USER`, a researcher account (new key in
+  `config/pkg_sync.vars.conf`). Found on calc04, 2026-10-27: a directory created
+  inside the TrueNAS home share inherited write for AD groups, and `nobody` (in
+  no AD group) could not have shown it. `docs/operations/PKG_SYNC.md` documents
+  the TrueNAS home-share variant (`/nfs/home/.biome-pkg-sync`, ACL replaced, mode
+  755). Tests S19d-S19f.
+- `biome_pkg_sync.sh --init-dir DIR [--test-user USER]`: the one-time setup as
+  one command. It creates the directory, sets the NFSv4 ACL to owner write and
+  others read, sets mode 755 without setgid, writes the site config in dry-run
+  if it does not exist, then runs `--check-dir`. Idempotent. Tests S20a-c.
+  Applied by hand on 2026-10-27; `--check-dir` passed on calc01-04.
+- `docs/operations/PKG_SYNC.md` Rollout: the commands for the morning checks,
+  switching a host to `apply`, the researcher test and the way back to `dry-run`.
+  Timer installed on calc01-04 on 2026-10-27, in `dry-run`.
+
+### Added (operations — cross-host package drift, ADR-0004)
+
+- `scripts/99_check_pkg_host_drift.sh`: read-only check that R hosts have the same
+  packages. `--snapshot` lists the system libraries of one host from their
+  `DESCRIPTION` files (no R start, no profile, no NFS); `--compare` diffs two or
+  more snapshots and exits `1` on a missing package, version or R version
+  difference. Found case: mlr3 on biome-calc01 only, future 1.76.0 vs 1.70.0,
+  because bspm installs into one host's local library.
+- `docs/adr/0004-replicated-local-r-libraries.md`: libraries stay on local disk
+  (no return of the v12.4 NFS storm) and their contents are replicated; this
+  check is the first, measurable step. Baseline 2026-10-15: 426 of 690 packages
+  drift across calc01-04.
+- CI: `tests/test_pkg_host_drift.sh` in `t1-static`.
+- `scripts/fix_r_pkg_versions_inplace.sh` (ADR-0004 step 3): upgrades the
+  `r-cran-*` packages already installed on one host to the repository version,
+  so hosts converge. Dry-run by default; `--commit` refuses a plan that removes
+  packages or touches `r-base*` (R pin), refuses while R/RStudio sessions run,
+  and saves every old `.deb` before upgrading; `--rollback DIR` reinstalls them.
+  Tested by `tests/test_fix_r_pkg_versions.sh` (stubbed apt, `t1-static`).
+  Exit `3` means refused before any change (used by the nightly sync).
+- `scripts/biome_pkg_sync.sh` (ADR-0004 step 4): nightly R package sync across
+  hosts. Each host writes a JSON manifest of its `r-cran-*` packages to a shared
+  directory on biome-store03; from 03:30 it installs the union of all hosts'
+  packages it lacks, at the repository version, after aligning versions with
+  `fix_r_pkg_versions_inplace.sh`. systemd timer every 15 minutes 03:00-05:00 (03:00/03:15 publish only), idle
+  CPU/IO priority; changes only when no `rsession`/`R` process runs (else exit 75,
+  next slot retries; busy at the last slot 04:45 → the next night). Never removes packages, never
+  touches `r-base*`, refuses a host whose R is not the pinned version, at most 50
+  installs per night, `dry-run` by default. `--status` is the fleet view,
+  `--rollback DIR` removes what a run installed, `--check-dir` checks the shared directory (root writes, nobody else). Runbook
+  `docs/operations/PKG_SYNC.md`; test `tests/test_biome_pkg_sync.sh` (S1-S18) in
+  `t1-static`.
+
+### Added (in-place R core upgrade to the pin)
+
+- `scripts/fix_r_version_inplace.sh`: brings one host's `r-base`, `r-base-core`,
+  `r-base-dev` and `r-recommended` to `DEFAULT_R_VERSION`
+  (`config/pin_r_version.vars.conf`, HARD RULE 19). For biome-calc03, which ran
+  R 4.5.3 while calc01/02/04 run 4.6.0. `scripts/pin_r_version.sh` only writes the
+  apt pin. The CRAN repository no longer offers 4.6.0 (apt's candidate is
+  4.6.1), so `--export-debs DIR` on a host that runs the pinned R writes its
+  `.deb` files plus `SHA256SUMS` (apt cache, repository, or `dpkg-repack`), and
+  `--debs DIR` installs them on the target host. Dry-run by default. Refuses with
+  host unchanged (exit 3) on running R sessions, held packages, a removal in the
+  plan, a downgrade without `--allow-downgrade`, a checksum mismatch, or an old
+  `.deb` that cannot be saved. Saves the old `.deb` files, loads every installed R
+  package before and after (exit 5 when one stops loading), restarts
+  rstudio-server, reports users whose personal library exists only for the old
+  R X.Y (never touched). `--rollback DIR` reinstalls the old version. Tested by
+  `tests/test_fix_r_version.sh` (R1-R14, stubbed apt/dpkg/R) in `t1-static`.
+  Decision (Jfs, 2026-10-27): 4.6.0 from calc01 to calc03 only; moving the pin to
+  4.6.1 is a later, separate change.
+
+### Fixed (R core upgrade breaks compiled packages; applied on biome-calc03)
+
+- Applied on biome-calc03, 2026-10-27: R 4.5.3 → 4.6.0. The load test caught
+  136 of 446 packages that stopped loading: R 4.6 removed `SETLENGTH` from the C
+  API, and the installed `r-cran-rlang` 1.1.7 and `r-cran-data.table` 1.18.2.1
+  builds called it; everything importing rlang failed with them. Fixed on the
+  host with `scripts/fix_r_pkg_versions_inplace.sh --commit
+  --accept-partial-rollback` (174 `r-cran-*` upgrades, rlang 1.3.0, data.table
+  1.18.6.1; only 19 old builds were still downloadable, the others were the
+  broken ones). Measured after: 449/450 packages load; the one failure
+  (`loadeR`) failed before the upgrade too. Researchers were not affected: no
+  session ran during the change.
+- `scripts/fix_r_version_inplace.sh`: on a minor-version change (4.5 → 4.6) the
+  plan now upgrades every installed `r-cran-*` package that has a newer
+  repository build in the same apt transaction as R, so this cannot happen
+  again on another host. `--core-only` keeps the old behaviour, with a warning.
+- The load test prints one progress line per batch (the first run looked hung
+  for minutes), and the commit is refused (exit 3, host unchanged) when the
+  baseline loads no package, because then nothing can be measured.
+- The user-library warning counts only non-empty libraries. On calc03 it
+  reported "11 users with packages for 4.5 only"; all 11 directories were empty.
+- `--debs DIR` now says when the repository offers the same version: on
+  calc03 apt installed 4.6.0-2.2404.0 from cloud.r-project.org rather than from
+  DIR. The morning's reading of `apt-cache policy` (4.6.0 no longer offered) was
+  wrong; the runbook is corrected. The apt index is refreshed with `--debs` too.
+- Tests: `tests/test_fix_r_version.sh` R1-R17 (new: the r-cran rebuild in the
+  plan and its rollback, `--core-only`, empty baseline, patch-level change).
+
+## [2026.10.1] - 2026-10-20 — Rprofile v12.11-fix3
+
+- **R profile shipped:** v12.11-fix3, unchanged from `v2026.10.0`. No R file changes.
+- **Deploy on a host:** `git pull` on `main`, then `sudo ./scripts/50_setup_nodes.sh`,
+  option 3. The first deploy writes `/etc/biome-calc/deployed_release`.
+- **In-place hotfixes this release absorbs:** none new.
+- **Tested on:** CI (`tests/test_deploy_release_guard.sh`, D1-D24); biome-calc04
+  before calc01-03 (see the host ledger).
+
+### Added (Step 8 deployed-release stamp and downgrade guard)
+
+- Step 8 of `scripts/50_setup_nodes.sh` (options 1, 3, O) writes
+  `/etc/biome-calc/deployed_release` after a full deploy: release
+  (`git describe --tags --always --dirty`), commit, branch, Rprofile version,
+  date, user, whether the deploy was an override, and the commit it replaced.
+  Each deploy also appends one line to `deployed_release.history`. Option V and
+  `--verify` print the stamp and say whether the checkout matches it.
+- Before writing anything, Step 8 compares the checkout with the stamp and
+  **refuses** to deploy when the checkout is older than the deployed commit,
+  has diverged from it (the 2026-10-20 calc04 stale-branch incident), does not
+  contain it (`git fetch` needed), has local changes or untracked files under
+  `templates/`, or is not a git checkout. Local values in `config/*.vars.conf`
+  and mode-only changes are allowed. With no stamp yet, it warns and deploys.
+- `--allow-downgrade` overrides the refusal on purpose. Rollback procedure:
+  `git checkout v<old>`, then `sudo ./scripts/50_setup_nodes.sh --allow-downgrade`,
+  option 3; the stamp records `override=true`. Returning to `main` afterwards
+  is a normal upgrade. Documented in
+  [`docs/operations/HOTFIX_REGISTER.md`](docs/operations/HOTFIX_REGISTER.md#rolling-back-a-release).
+- New `lib/deploy_release.sh`; test `tests/test_deploy_release_guard.sh` runs in `t1-static`.
+
+### Added (release automation, already in the `v2026.10.0` commit)
+
+- `.github/workflows/release.yml`: when `main` gets a new release section in
+  this file, it tags the commit `vYYYY.MM.N` and publishes a GitHub Release
+  whose notes are that section. An existing release is never touched.
+  `scripts/tools/release_notes.sh` extracts the section; regression test
+  `tests/test_release_notes.sh` (R1-R7) runs in `t1-static` and before every
+  release. These entries were merged with `v2026.10.0` but written after its
+  notes, so they appear here.
+
+## [2026.10.0] - 2026-10-20 — Rprofile v12.11-fix3
+
+First tagged release. It holds every change recorded in this file since it was
+started, so it is long; later releases cover one batch of merges each.
+
+- **R profile shipped:** v12.11-fix3 (`RPROFILE_VERSION="12.11"`: the `-fix`,
+  `-fix2` and `-fix3` steps do not change the banner, so the banner alone cannot tell
+  them apart; the release tag can).
+- **Deploy on a host:** checkout on `main` at tag `v2026.10.0`, then
+  `sudo ./scripts/50_setup_nodes.sh`, option 3 (Step 8, R config files only).
+- **In-place hotfixes this release absorbs:** `fix_bspm_dbus_inplace.sh`
+  (applied on biome-calc01-04 on 2026-10-19). Per-host state lives in
+  [`docs/operations/HOTFIX_REGISTER.md`](docs/operations/HOTFIX_REGISTER.md).
+- **Tested on:** biome-calc04 (test host), 2026-10-20: v12.11-fix2 researcher
+  checks, then the v12.11-fix3 redeploy (option 3, syntax validated, 14
+  fragments).
+
+### Fixed (Rprofile v12.11-fix3 — review fixes on v12.11-fix2)
+
+- Parquet sidecar: equal mtimes count as stale (coarse-timestamp filesystems
+  could tie a rewritten CSV with its old sidecar). Message now reads
+  `ignoring stale parquet sidecar (not newer than <file>)`. Test P9.
+- ranger guard recognises its own trace; it no longer mistakes another trace
+  for itself, and leaves a user's trace in place instead of dropping it.
+  Tests G10-G12.
+
+### Fixed (Rprofile v12.11-fix2 — `read.csv()` returned a stale `.parquet` sidecar)
+
+- Fragment 50 Smart I/O: `read.csv(f)` / `fread(f)` used `f.parquet` whenever it
+  existed, even when the CSV had been rewritten since, so a researcher on
+  biome-calc01 kept getting the old table after `write.csv()` (2026-10). The
+  sidecar is now used only when it is at least as new as the text file, the call
+  has no extra reader arguments (`sep=`, `header=`, `colClasses=` are not applied
+  to parquet), and the session is interactive. A stale sidecar is skipped with a
+  `BIOME-IO: ignoring stale parquet sidecar` message. `read.csv` via the sidecar
+  now returns a plain `data.frame` with `check.names` applied; `fread` returns a
+  `data.table`. Opt-out: `options(biome.parquet_sidecar = FALSE)`.
+- Dispatcher: ranger `mtry` guard. `ranger` stops on `mtry` > number of
+  predictors with only `User interrupt or internal error.` (the real reason is
+  printed inside the worker and lost under future/mlr3). A hook on ranger's
+  namespace load, installed before the worker/full-profile branch so PSOCK
+  workers get it too, traces `ranger::ranger` and raises
+  `BIOME-CALC: ranger mtry = 11 but the data has only 9 predictor(s)` with the
+  fix. It never changes `mtry` (HC-17); formula calls are not checked. Opt-out:
+  `options(biome.ranger_mtry_guard = FALSE)`. Suite
+  `tests/test_ranger_mtry_guard.sh` (S1–S2, G0–G9 with the real ranger, PSOCK
+  worker included); CI installs ranger from public RSPM.
+- New regression suite `tests/test_parquet_sidecar_gate.sh` (S1–S2 static,
+  P1–P8 behaviour), wired into `r-runtime-static`. It fails on the previous
+  fragment. Not ported to T2 (TD-T2-01: T2 still runs the pre-fragment snapshot).
+
+### Security (bspm installs without sudo, ADR-0005)
+
+- New `scripts/fix_bspm_dbus_inplace.sh`: registers bspm's own D-Bus system
+  service (`org.r_project.linux1`) so researchers' `install.packages()` reaches apt
+  through a root service instead of `sudo`. The bus policy lets `domain_users`
+  call only `install`, `available`, `discover` and `Introspect`; `remove` is
+  denied. Flips `bspm.sudo` to `FALSE` in the deployed `/etc/R/Rprofile.site`
+  (exactly the two dispatcher lines, refuses otherwise). Dry-run by default,
+  `--commit`, `--rollback DIR`, `--skip-profile`, `--group NAME`; backup in
+  `/root/bspm-dbus-hotfix-<ts>/`; reloads dbus and rolls back automatically if
+  the service does not answer. Sudoers is not touched.
+- `templates/Rprofile_site.R.template` section 0: `bspm.sudo = FALSE`; bspm is
+  enabled only when the D-Bus service file exists, otherwise `install.packages()`
+  is plain R into the personal library.
+- `50_setup_nodes.sh` Step 7 registers the service and no longer writes
+  `/etc/sudoers.d/99-bspm-domain-users` (`NOPASSWD` on `apt-get`/`dpkg`/`bspm.py`
+  was root for every domain user). An existing file is kept, with a warning.
+- Audit check 14.6 (`00_audit_v28.R.template`) now checks the D-Bus service and
+  policy and warns while the legacy sudoers rule exists.
+- `tests/test_fix_bspm_dbus.sh` (23 cases, mutation-checked) runs in CI.
+- `tests/test_bspm_dbus_policy_live.sh` loads the rendered policy into a real
+  private dbus-daemon and checks the allow/deny matrix (12 cases). Added after
+  the first test-host run, where dbus-daemon rejected the policy file (a member
+  rule without an interface) and the hotfix rolled back.
+- The hotfix replaces a hand-made registration found on the hosts (service run
+  from `/root/R/.../4.5/bspm`, policy open to every local user, `remove`
+  included). Verification checks which process owns the bus name: if a
+  service from another path still owns it, the hotfix waits up to
+  `FIX_BSPM_OWNER_WAIT` seconds (default 30) for it to exit, then rolls back
+  naming its PID instead of reporting success.
+- Review fixes before merge: each `--commit` gets its own backup directory
+  (a second run in the same second fails instead of sharing a manifest); the
+  module check uses `/usr/bin/python3`, the interpreter bus activation runs;
+  Step 1 installs `python3-dbus`, `python3-gi`, `python3-apt`; Step 7 installs
+  bspm into `/usr/lib/R/site-library`, where the service is registered from.
+- Applied on biome-calc01-04 on 2026-10-19, both `domain_users` sudo lines
+  removed on all four (ADR-0005 rollout log).
+
+### Changed (CI)
+
+- `r-runtime-static` runs on the production R version: `setup-r` reads
+  `DEFAULT_R_VERSION` from `config/pin_r_version.vars.conf` (currently **4.6.0**,
+  was a hard-coded 4.4.1) and a new step fails the job if `getRversion()` differs
+  from the pin (HARD RULE 19, roadmap WS-0.3). All six R runtime suites pass on
+  R 4.6.0 unchanged (verified locally on `rocker/r-ver:4.6.0` as a non-root user).
+
+### Added (planning)
+
+- `docs/planning/ROADMAP_EXECUTION_PLAN.md`: ordered work streams (WS-0 hygiene,
+  WS-1 live T1 defects, WS-2 T2 parity, WS-3 consolidation, WS-4 T3 deferred), each
+  with audit / implement / validate phases. Also ADR-style decisions, the open-PR
+  triage record, and the contradictions found (CI tests R 4.4.1 while T1 pins 4.6.0;
+  stale `open_gaps`; T2 has no `/Rtmp` equivalent and no recorded delta for it).
+- `docs/planning/PROJECT_MAP_CONSOLIDATION_PLAN.md` ported from PR #13 (closed as
+  superseded), status re-verified against `main`; it is WS-3 of the plan.
+
+### Fixed (Rprofile v12.11-fix — wrappers survive `rm(list = ls(all.names = TRUE))`)
+
+Ported from the unmerged `setwd_safe_regression` branch (PR #14 / #12) onto the
+current `main`; those PRs are closed as superseded.
+
+- **R runtime: `setwd()` / wrapper delegation broke after a researcher's
+  `rm(list = ls(all.names = TRUE))`.** Symptom reported from `biome-calc01`:
+  `Error in .biome_original_setwd(dir) : could not find function ".biome_original_setwd"`
+  on an ordinary `write.csv(...)` line (the implicit `setwd()` RStudio issues
+  around project/source operations hit the stale guard). Root cause + the
+  `60_safe_setwd.R` `original_fn(dir)` fix and the `35_compile_routing.R`
+  closure-capture hardening are detailed in
+  [`Rprofile_site.CHANGELOG.md` v12.11-fix](docs/reference/Rprofile_site.CHANGELOG.md).
+  **Operator action:** the running host still executes the pre-fix deployed
+  fragment — re-render and re-deploy via `scripts/50_setup_nodes.sh` to clear
+  the error in live sessions.
+
+- **`safe_setwd` rm-survival regression suite.** Added
+  `tests/test_safe_setwd_rm_regression.sh` (A–D groups: parse gate, static
+  `original_fn` check, R runtime T1–T9, full template parse gate) and
+  `tests/fixtures/test_safe_setwd_rm_regression.R`. Guards the
+  `60_safe_setwd.R` fix (runtime detail in
+  [`Rprofile_site.CHANGELOG.md` v12.11-fix](docs/reference/Rprofile_site.CHANGELOG.md)):
+  `setwd()` must survive `rm(list=ls(all.names=TRUE))` while preserving the
+  Martina-gate hard-fail and the `.biome_original_setwd` globalenv export.
+  Test infrastructure is stored via `options()` (base namespace) so it
+  survives the simulated globalenv purges. Review fixes applied before merge:
+  - R error reporting: replaced the dead `conditionMessage(attr(ok, "condition"))`
+    pattern (T1/T3/T4/T7) — `tryCatch` returns a bare scalar, so the condition
+    is never attached as an attribute and the old form threw
+    `conditionMessage(NULL)` on a *real* failure, masking the diagnostic. Now
+    captures the message inside the handler via `err_msg <<- conditionMessage(e)`.
+  - Bash harness: unified all three R invocations on a single
+    `R_BIN="${RSCRIPT:-Rscript}"` (was a mix of bare `Rscript` and inline
+    `${RSCRIPT:-Rscript}`) so the interpreter override applies consistently.
+- **Cross-fragment wrapper rm-survival suite.** Added
+  `tests/fixtures/test_wrapper_rm_survival.R` (W1–W4, wired into the harness as
+  group E): asserts every base/package wrapper the `Rprofile_site.d/` kernel
+  installs (`setwd`, `detectCores`, `options`, `compileNimble`) survives
+  `rm(list = ls(all.names = TRUE))`. Confirmed `05`/`50`/`55` were already
+  closure-safe and guards the hardened `35` (above).
 
 ### Added (home quota view: multi-node runbook)
 
@@ -73,6 +470,10 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 
 ### Changed (dependencies, T2 base images)
 
+- Dependabot #23 (superseded, applied here): `ollama/ollama` 0.35.0 → 0.35.1
+  (patch). The bot PR was red only on `generate --check` (it cannot regenerate the
+  IDE rule files); files regenerated, runbook + `FUTURE_MIGRATION.md` pin rows
+  updated. Ollama image proven only by the T2 light build / nightly monster canary.
 - Dependabot #20: `rocker/geospatial` 4.4.2 → 4.4.3 (R patch release), `nginx`
   1.27.3-alpine → 1.31.0-alpine, `ollama/ollama` 0.5.4 → 0.35.0. Merged after the
   monster build (rstudio-sssd, rstudio-samba, ollama-ai) passed on the branch.
@@ -319,7 +720,6 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
     services, full CRAN/RStudio install.
 - New local-runnable helpers: `tests/check_exec_bits.sh`, `tests/templates_parse.sh`,
   `tests/nginx_render_check.sh`.
-
 ### Fixed
 
 - **The RStudio login script re-added `R_LIBS_USER` to every `~/.Renviron`.**

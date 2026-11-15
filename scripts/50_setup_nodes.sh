@@ -33,6 +33,15 @@ fi
 # shellcheck source=../lib/common_utils.sh disable=SC1091
 source "${COMMON_UTILS}"
 
+# ── Deployed-release stamp + downgrade guard (ADR-0006) ──
+DEPLOY_RELEASE_LIB="${WORKSPACE_ROOT}/lib/deploy_release.sh"
+if [[ ! -f "${DEPLOY_RELEASE_LIB}" ]]; then
+  echo "[ERROR] Missing: ${DEPLOY_RELEASE_LIB}" >&2
+  exit 1
+fi
+# shellcheck source=../lib/deploy_release.sh disable=SC1091
+source "${DEPLOY_RELEASE_LIB}"
+
 # ── Load configuration ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
 if [[ ! -f "${VARS_CONF}" ]]; then
@@ -67,6 +76,7 @@ SKIP_OLLAMA="${SKIP_OLLAMA:-false}"
 DRY_RUN=false
 DO_UNINSTALL=false
 DO_VERIFY=false
+ALLOW_DOWNGRADE=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -74,9 +84,13 @@ for arg in "$@"; do
     --dry-run)     DRY_RUN=true ;;
     --uninstall)   DO_UNINSTALL=true ;;
     --verify)      DO_VERIFY=true ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=true ;;
     --help|-h)
-      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall] [--verify]"
-      echo "  --verify    Run 3-layer cgroup + Rprofile version check without deploying"
+      echo "Usage: sudo $0 [--skip-ollama] [--dry-run] [--uninstall] [--verify] [--allow-downgrade]"
+      echo "  --verify           Run 3-layer cgroup + Rprofile version check without deploying"
+      echo "  --allow-downgrade  Let Step 8 deploy a checkout older than (or diverged from) the"
+      echo "                     deployed release, or with local changes under templates/."
+      echo "                     Use it to roll back a release: git checkout <tag>, then this."
       exit 0
       ;;
   esac
@@ -228,7 +242,9 @@ setup_nodes_dependencies() {
     default-jdk \
     libnlopt-dev \
     libgoogle-perftools-dev sendemail dnsutils \
-    samba-common-bin winbind rsync tree
+    samba-common-bin winbind rsync tree \
+    python3-dbus python3-gi python3-apt
+  # python3-dbus/gi/apt: bspm's D-Bus service (Step 7, ADR-0005)
   log_success "Base dependencies installed"
   # NOTE: R CMD javareconf + rJava source install handled by r_env_manager.sh configure_java_for_r()
 }
@@ -668,26 +684,33 @@ setup_nodes_python() {
 setup_nodes_r_packages() {
   log_step "Step 7: bspm & R Packages"
 
-  # ── Configure bspm Authentication ──
-  # RStudio Web terminal/console does not have a polkit agent or interactive TTY for passwords.
-  # We must explicitly allow the users to execute apt via bspm without a password.
-  local sudoers_bspm="/etc/sudoers.d/99-bspm-domain-users"
-  log_info "Configuring passwordless sudo for bspm (domain_users)"
-  cat > "${sudoers_bspm}" << 'SUDOEOF'
-# BIOME-CALC: Allow domain_users to use bspm for R package management without password prompts in RStudio.
-%domain_users ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt-mark, /usr/bin/dpkg, /usr/lib/R/site-library/bspm/service/bspm.py
-SUDOEOF
-  run_cmd chmod 0440 "${sudoers_bspm}"
-
   local tmp_bspm
   tmp_bspm=$(mktemp /tmp/r_setup_bspm.XXXXXX.R)
   cat > "${tmp_bspm}" << 'EOF'
-if (!requireNamespace("bspm", quietly=TRUE)) {
-  install.packages("bspm", repos="https://cloud.r-project.org")
+# into the system library: the D-Bus service is registered from there, and
+# root's R_LIBS_USER (/root/R/...) is where calc04's stray copy came from
+if (!dir.exists("/usr/lib/R/site-library/bspm")) {
+  install.packages("bspm", lib = "/usr/lib/R/site-library", repos = "https://cloud.r-project.org")
 }
 EOF
   run_cmd Rscript --vanilla "${tmp_bspm}"
   run_cmd rm -f "${tmp_bspm}"
+
+  # ── bspm authentication: D-Bus system service, not sudo (ADR-0005) ──
+  # RStudio Web has no polkit agent or TTY. bspm's own root D-Bus service
+  # installs r-cran-* debs for domain_users; the policy denies `remove`.
+  # The old rule (NOPASSWD apt-get/dpkg/bspm.py) was root for every domain
+  # user, so it is no longer written. An existing file is left in place:
+  # removing it is the operator's call once researcher installs are verified.
+  log_info "Registering the bspm D-Bus service for domain_users (no sudo)"
+  if ! bash "${SCRIPT_DIR}/fix_bspm_dbus_inplace.sh" --commit --skip-profile; then
+    log_error "bspm D-Bus service registration failed; researchers cannot install system R packages"
+    return 1
+  fi
+  if [[ -f /etc/sudoers.d/99-bspm-domain-users ]]; then
+    log_warn "Legacy /etc/sudoers.d/99-bspm-domain-users still present (root for every domain user)."
+    log_warn "  Remove it after a researcher install works without sudo: see docs/adr/0005-bspm-dbus-service-not-sudo.md"
+  fi
 
   # Build a safe R vector from the bash array
   local r_pkg_vector
@@ -1153,8 +1176,25 @@ setup_nodes_audit_nfs() {
 # ==============================================================================
 # STEP 8: DEPLOY SYSTEM CONFIGURATION FILES
 # ==============================================================================
+# ── Release guard (ADR-0006): runs once per invocation, before any write ──
+DEPLOY_STAMP="${BIOME_CONF}/deployed_release"
+RELEASE_GUARD_RC=""
+setup_nodes_release_guard() {
+  [[ -n "${RELEASE_GUARD_RC}" ]] && return 0
+  RELEASE_GUARD_RC=0
+  biome_release_guard "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}" "${ALLOW_DOWNGRADE}" || RELEASE_GUARD_RC=$?
+  if [[ "${RELEASE_GUARD_RC}" == 1 ]]; then
+    if [[ "${DRY_RUN}" == true ]]; then
+      log_warn "[DRY-RUN] A real deploy would stop here (release check failed)."
+    else
+      exit 1
+    fi
+  fi
+}
+
 setup_nodes_config_files() {
   log_step "Step 8: Deploy System Configuration Files"
+  setup_nodes_release_guard
 
   local current_ct
   current_ct=$(cat "${BIOME_CONF}/coretype" 2>/dev/null || echo "auto")
@@ -1514,6 +1554,16 @@ tryCatch({
       fi
       rm -rf "${bundle_stage}"
     fi
+  fi
+
+  # ── Deployed-release stamp (ADR-0006): last, so it only records a full Step 8 ──
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] Would write ${DEPLOY_STAMP}"
+  else
+    local stamp_override=false
+    [[ "${RELEASE_GUARD_RC}" == 3 ]] && stamp_override=true
+    biome_release_write_stamp "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}" "${RPROFILE_VERSION}" "${stamp_override}"
+    log_success "Deployed release recorded: $(biome_release_field "${DEPLOY_STAMP}" release) -> ${DEPLOY_STAMP}"
   fi
 }
 
@@ -2714,6 +2764,7 @@ fi
 # ── Handle --verify CLI flag (non-interactive cgroup + version check) ──
 if [[ "${DO_VERIFY}" == true ]]; then
   setup_nodes_preflight
+  biome_release_show "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}"
   setup_nodes_verify_cgroups
   # Check deployed Rprofile version (grep -m1, not `grep | head -1`: see SIGPIPE note above)
   deployed_ver=$(grep -m1 -oP 'VERSION\s*<-\s*"\K[0-9.]+' /etc/R/Rprofile.site 2>/dev/null || true)
@@ -2812,6 +2863,7 @@ choice="${choice^^}"  # uppercase
 case "${choice}" in
   1)
     setup_nodes_preflight
+    setup_nodes_release_guard
     setup_nodes_dependencies
     setup_nodes_arrow
     setup_nodes_gcloud
@@ -2894,12 +2946,14 @@ case "${choice}" in
     ;;
   O)
     setup_nodes_preflight
+    setup_nodes_release_guard
     RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site_optimized.R.template"
     setup_nodes_rust_compile
     setup_nodes_config_files
     ;;
   V)
     setup_nodes_preflight
+    biome_release_show "${WORKSPACE_ROOT}" "${DEPLOY_STAMP}"
     setup_nodes_verify_cgroups
     ;;
   U)
