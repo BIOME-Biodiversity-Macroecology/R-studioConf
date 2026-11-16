@@ -378,6 +378,7 @@
         // Clear Authentication Logic
         function clearAuthSessions() {
             console.log("Clearing sessions...");
+            try { localStorage.removeItem('biome_portal_user'); localStorage.removeItem('biome_portal_login'); localStorage.removeItem('biome_report_email'); } catch (e) { }
             // 1. Clear Basic Auth (Terminal) logic
             var xhr = new XMLHttpRequest();
             xhr.open("GET", "/terminal/", true, "logout", "logout");
@@ -465,6 +466,13 @@
                 console.log("2. Terminal Auth Response:", response.status, response.statusText);
                 
                 if (response.status === 200) {
+                    // Remember the verified login for the problem-report form (biome-portal.js).
+                    try {
+                        // A different person on this browser: drop the previous person's saved contact.
+                        if (localStorage.getItem('biome_portal_user') !== user) { localStorage.removeItem('biome_report_email'); localStorage.removeItem('biome_portal_login'); }
+                        localStorage.setItem('biome_portal_user', user);
+                        if (rawUser.indexOf('@') !== -1) localStorage.setItem('biome_portal_login', rawUser);
+                    } catch (e) { }
                     // 200 = OK, Credentials Validated
                     
                     status.style.color = "#8FBC8F";
