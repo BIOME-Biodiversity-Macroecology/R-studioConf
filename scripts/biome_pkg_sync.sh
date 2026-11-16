@@ -167,8 +167,9 @@ publish() {
   apt="$(installed_rcran | tsv_to_json "package version")"
   other="$(other_packages | tsv_to_json "package version lib")"
   jq -n --arg host "$HOST" --arg at "$(utc_now)" --arg r "$(local_r_version)" \
-        --arg mode "$PKG_SYNC_MODE" --argjson apt "$apt" --argjson other "$other" \
-    '{schema: 1, host: $host, generated_at: $at, r_version: $r, mode: $mode, apt: $apt, other: $other}' \
+        --arg mode "$PKG_SYNC_MODE" \
+        --slurpfile apt <(printf '%s\n' "$apt") --slurpfile other <(printf '%s\n' "$other") \
+    '{schema: 1, host: $host, generated_at: $at, r_version: $r, mode: $mode, apt: $apt[0], other: $other[0]}' \
     | write_atomic "${PKG_SYNC_DIR}/hosts/${HOST}.json"
   log_ok "manifest published: ${PKG_SYNC_DIR}/hosts/${HOST}.json ($(jq 'length' <<<"$apt") r-cran-*, $(jq 'length' <<<"$other") not managed by apt)"
 }
@@ -198,17 +199,21 @@ excluded_packages() {
 
 # missing packages for this host: union of fresh manifests - installed - excluded,
 # names validated, available in apt. Prints "pkg<TAB>from-hosts".
+# The three name lists reach awk as files (process substitution), never as -v
+# arguments: one argument is limited to 128 KiB (MAX_ARG_STRLEN) and the list of
+# r-cran-* names in the repository is larger ("Argument list too long").
 plan_missing() {
-  local manifests="$1" installed_names known
-  installed_names="$(installed_rcran | cut -f1)"
-  known="$(apt-cache pkgnames r-cran- 2>/dev/null | LC_ALL=C sort -u)"
+  local manifests="$1"
   jq -r '[.[] | .host as $h | .apt[] | {p: .package, h: $h}]
          | group_by(.p) | .[] | "\(.[0].p)\t\([.[].h] | join(","))"' <<<"$manifests" \
     | LC_ALL=C sort \
-    | awk -F'\t' -v inst="$installed_names" -v excl="$(excluded_packages)" -v known="$known" '
-        BEGIN { n = split(inst, a, "\n"); for (i = 1; i <= n; i++) I[a[i]] = 1
-                n = split(excl, b, "\n"); for (i = 1; i <= n; i++) X[b[i]] = 1
-                n = split(known, c, "\n"); for (i = 1; i <= n; i++) K[c[i]] = 1 }
+    | awk -F'\t' \
+        -v f_inst=<(installed_rcran | cut -f1) \
+        -v f_excl=<(excluded_packages) \
+        -v f_known=<(apt-cache pkgnames r-cran- 2>/dev/null | LC_ALL=C sort -u) '
+        BEGIN { while ((getline l < f_inst)  > 0) I[l] = 1
+                while ((getline l < f_excl)  > 0) X[l] = 1
+                while ((getline l < f_known) > 0) K[l] = 1 }
         $1 !~ /^r-cran-[a-z0-9][a-z0-9.+-]*$/ { print "BAD\t" $1 "\t" $2; next }
         ($1 in I) || ($1 in X) { next }
         !($1 in K) { print "NA\t" $1 "\t" $2; next }
@@ -226,9 +231,10 @@ write_report() {
   local r
   r="$(jq -n --arg host "$HOST" --arg at "$(utc_now)" --arg mode "$PKG_SYNC_MODE" \
           --arg status "$REPORT_STATUS" --arg note "$REPORT_NOTE" --arg align "$REPORT_ALIGN" \
-          --arg backup "$REPORT_BACKUP" --argjson new "$REPORT_NEW" --argjson na "$REPORT_NA" \
+          --arg backup "$REPORT_BACKUP" \
+          --slurpfile new <(printf '%s\n' "$REPORT_NEW") --slurpfile na <(printf '%s\n' "$REPORT_NA") \
     '{schema: 1, host: $host, finished_at: $at, mode: $mode, status: $status, note: $note,
-      version_alignment: $align, installed_or_planned: $new, not_in_apt: $na, backup: $backup}')"
+      version_alignment: $align, installed_or_planned: $new[0], not_in_apt: $na[0], backup: $backup}')"
   mkdir -p "${PKG_SYNC_STATE_DIR}"
   write_atomic "${PKG_SYNC_STATE_DIR}/last_report.json" <<<"$r"
   [[ -d "${PKG_SYNC_DIR}/reports" ]] && write_atomic "${PKG_SYNC_DIR}/reports/${HOST}.json" <<<"$r"
