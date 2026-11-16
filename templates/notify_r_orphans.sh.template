@@ -67,7 +67,6 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
         continue
     fi
 
-    USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")
     N_ORPHANS=$(grep -c "PROCESSO ORFANO TERMINATO" "$USER_LOG" 2>/dev/null || echo 0)
 
     [ "$N_ORPHANS" -eq 0 ] && continue
@@ -75,6 +74,17 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     if [ "$SEND_MAIL" -eq 0 ]; then
         log_notify "SKIP | Modalità mail disabilitata (usa --mail). user=${USERNAME} | orphans=${N_ORPHANS}"
         continue
+    fi
+
+    # Resolve the address only for users that will get a mail (the AD
+    # lookup costs a kinit + ldapsearch): map -> AD -> pattern.
+    read -r USER_EMAIL MAIL_SOURCE <<< "$(resolve_user_email_source "$USERNAME" "${MAIL_DOMAIN:-}")"
+    if [ -z "${USER_EMAIL:-}" ]; then
+        log_notify "SKIP | No address resolved. user=${USERNAME}"
+        continue
+    fi
+    if [ "$MAIL_SOURCE" = "pattern" ]; then
+        log_notify "WARN | Address not verified (no map entry, no AD mail). user=${USERNAME} | to=${USER_EMAIL}"
     fi
 
     # ── Componi body ──────────────────────────────────────────
@@ -121,9 +131,9 @@ for USER_LOG in "${NOTIFY_DIR}"/*.log; do
     SUBJECT="[${NODE_ID}] Cleanup risorse: ${N_ORPHANS} processi terminati"
 
     # ── Destinatari ───────────────────────────────────────────────
-    # Utente in To: (CSV multi-dominio se MAIL_DOMAINS_USER è settato)
+    # Utente in To: (fonte map|ad|pattern; CSV multi-dominio solo con pattern)
     # Admin in Bcc: per audit silenzioso (l'utente non li vede negli header)
-    log_notify "SENDING | user=${USERNAME} | to=${USER_EMAIL} | bcc=${ADMIN_RECIPIENTS} | orphans=${N_ORPHANS}"
+    log_notify "SENDING | user=${USERNAME} | to=${USER_EMAIL} | source=${MAIL_SOURCE} | bcc=${ADMIN_RECIPIENTS} | orphans=${N_ORPHANS}"
 
     SEND_ARGS=(
         -s "$SMTP_HOST"

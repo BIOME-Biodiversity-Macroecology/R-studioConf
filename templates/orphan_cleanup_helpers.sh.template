@@ -54,53 +54,116 @@ resolve_admin_recipients() {
     return 0
 }
 
-# ── Risolvi email utente (con mapping opzionale e multi-dominio) ──
-# Ordine di risoluzione:
-#   1. Override esplicito in /etc/biome-calc/conf/user_email_map.txt
-#   2. Se MAIL_DOMAINS_USER è definito (space-separated list), ritorna
-#      un CSV "user@d1,user@d2" così che sendemail spedisca a tutti i
-#      domini AD attivi (es. "unibo.it studio.unibo.it"). Il relay
-#      assorbe i bounce degli indirizzi inesistenti.
-#   3. Fallback: <username>@DEFAULT_DOMAIN (dominio passato come $2).
+# ── User e-mail resolution (map -> AD -> pattern) ────────────────────
+# Resolution order (first hit wins):
+#   1. map     explicit override in user_email_map.txt
+#   2. ad      the AD `mail` attribute of the account, looked up with the
+#              host keytab (Kerberos GSSAPI bind). Enabled only when
+#              USER_MAIL_AD_URI and USER_MAIL_AD_BASE_DN are set (they come
+#              from r_orphan_cleanup.conf). Any failure (no keytab, no
+#              ldapsearch, AD down, timeout, no mail attribute) falls through.
+#   3. pattern username@<each domain in MAIL_DOMAINS_USER> (CSV), else
+#              username@<DEFAULT_DOMAIN>. Unverified: the relay accepts and
+#              silently drops wrong addresses, which is why AD comes first.
 #
-# Uso:
-#   USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")
+# Safe to source with `set -u` on or off; every function returns 0 and
+# never blocks longer than ~2x USER_MAIL_AD_TIMEOUT.
 #
+# Usage:
+#   read -r USER_EMAIL MAIL_SOURCE <<< "$(resolve_user_email_source "$USERNAME" "$MAIL_DOMAIN")"
+#   USER_EMAIL=$(resolve_user_email "$USERNAME" "$MAIL_DOMAIN")   # address only
+
+# Unset or still a literal envsubst token ("${...}") from an old deploy -> empty
+_biome_conf_value() {
+    case "${1:-}" in
+        *'${'*) echo "" ;;
+        *) echo "${1:-}" ;;
+    esac
+}
+
+# One plain address: local@domain.tld, no spaces, commas or angle brackets
+_biome_valid_address() {
+    [[ "${1:-}" =~ ^[^[:space:]@,\<\>\"\;]+@[^[:space:]@,\<\>\"\;]+\.[^[:space:]@,\<\>\"\;]+$ ]]
+}
+
+# ad_lookup_user_mail USER -> AD mail attribute on stdout, or nothing
+ad_lookup_user_mail() {
+    local username="${1:-}"
+    local uri base timeout_s principal ccdir out addr
+    uri="$(_biome_conf_value "${USER_MAIL_AD_URI:-}")"
+    base="$(_biome_conf_value "${USER_MAIL_AD_BASE_DN:-}")"
+    timeout_s="$(_biome_conf_value "${USER_MAIL_AD_TIMEOUT:-}")"
+    [[ "$timeout_s" =~ ^[0-9]+$ ]] && [ "$timeout_s" -gt 0 ] || timeout_s=10
+
+    [ -n "$uri" ] && [ -n "$base" ] || return 0
+    # Strict charset: no LDAP filter injection, no option injection
+    [[ "$username" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || return 0
+    command -v kinit >/dev/null 2>&1 || return 0
+    command -v ldapsearch >/dev/null 2>&1 || return 0
+    command -v timeout >/dev/null 2>&1 || return 0
+
+    principal="$(_biome_conf_value "${USER_MAIL_AD_PRINCIPAL:-}")"
+    [ -n "$principal" ] || principal="$(hostname -s 2>/dev/null | tr '[:lower:]' '[:upper:]')\$"
+
+    # Private credential cache: never touches root's default ccache,
+    # removed right after the lookup.
+    ccdir="$(mktemp -d 2>/dev/null)" || return 0
+    out="$(
+        export KRB5CCNAME="FILE:${ccdir}/cc"
+        timeout "$timeout_s" kinit -k "$principal" >/dev/null 2>&1 \
+            && timeout "$timeout_s" ldapsearch -LLL -o ldif-wrap=no -Y GSSAPI -Q \
+                   -H "$uri" -b "$base" "(sAMAccountName=${username})" mail 2>/dev/null
+        command -v kdestroy >/dev/null 2>&1 && kdestroy >/dev/null 2>&1
+        true
+    )" || true
+    rm -rf "$ccdir"
+
+    addr="$(printf '%s\n' "$out" | awk 'tolower($1)=="mail:" { print $2; exit }')"
+    _biome_valid_address "$addr" && printf '%s\n' "$addr"
+    return 0
+}
+
+# resolve_user_email_source USER [DEFAULT_DOMAIN] -> "<address> <map|ad|pattern>"
+resolve_user_email_source() {
+    local username="${1:-}"
+    local default_domain="${2:-}"
+    local map_file="${USER_EMAIL_MAP_FILE:-/etc/biome-calc/conf/user_email_map.txt}"
+    local mapped ad_addr domains out d
+
+    # 1) Explicit override wins over everything
+    if [ -f "$map_file" ]; then
+        mapped=$(awk -v u="$username" '$1 !~ /^#/ && $1==u {print $2; exit}' "$map_file")
+        if [ -n "$mapped" ] && [[ "$mapped" == *"@"* ]]; then
+            echo "$mapped map"
+            return 0
+        fi
+    fi
+
+    # 2) Active Directory mail attribute
+    ad_addr="$(ad_lookup_user_mail "$username")"
+    if [ -n "$ad_addr" ]; then
+        echo "$ad_addr ad"
+        return 0
+    fi
+
+    # 3) Pattern: every domain in MAIL_DOMAINS_USER, else the default domain
+    domains="$(_biome_conf_value "${MAIL_DOMAINS_USER:-}")"
+    out=""
+    for d in $domains; do
+        out="${out:+${out},}${username}@${d}"
+    done
+    if [ -z "$out" ]; then
+        default_domain="$(_biome_conf_value "$default_domain")"
+        out="${username}@${default_domain:-unibo.it}"
+    fi
+    echo "$out pattern"
+    return 0
+}
+
+# resolve_user_email USER [DEFAULT_DOMAIN] -> address only (legacy interface)
 resolve_user_email() {
-    local USERNAME="$1"
-    local DEFAULT_DOMAIN="${2:-unibo.it}"
-    local MAP_FILE="/etc/biome-calc/conf/user_email_map.txt"
-
-    # 1) Override esplicito (vince su tutto)
-    if [ -f "$MAP_FILE" ]; then
-        local MAPPED
-        MAPPED=$(awk -v u="$USERNAME" '
-            $1 !~ /^#/ && $1==u {print $2; exit}' "$MAP_FILE")
-        if [ -n "$MAPPED" ] && [[ "$MAPPED" == *"@"* ]]; then
-            echo "$MAPPED"
-            return 0
-        fi
-    fi
-
-    # 2) Multi-dominio (spara-a-entrambi) se MAIL_DOMAINS_USER è popolato
-    if [ -n "${MAIL_DOMAINS_USER:-}" ]; then
-        local out=""
-        local d
-        for d in ${MAIL_DOMAINS_USER}; do
-            [ -z "$d" ] && continue
-            if [ -z "$out" ]; then
-                out="${USERNAME}@${d}"
-            else
-                out="${out},${USERNAME}@${d}"
-            fi
-        done
-        if [ -n "$out" ]; then
-            echo "$out"
-            return 0
-        fi
-    fi
-
-    # 3) Fallback single-domain (legacy)
-    echo "${USERNAME}@${DEFAULT_DOMAIN}"
+    local resolved
+    resolved="$(resolve_user_email_source "$@")"
+    echo "${resolved% *}"
     return 0
 }

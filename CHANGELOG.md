@@ -8,6 +8,22 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (user e-mail from Active Directory, ADR-0010)
+
+- `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`
+  (map → AD `mail` attribute → `MAIL_DOMAINS_USER` pattern, prints
+  `<address> <map|ad|pattern>`) and `ad_lookup_user_mail` (host keytab, GSSAPI,
+  private credential cache, timeout, username charset check). Every failure
+  falls back to the old pattern. `resolve_user_email` keeps its interface.
+- `notify_r_orphans.sh`: resolves only users that get a mail and logs
+  `source=` on every send, plus a `WARN` for unverified `pattern` addresses.
+- `r_orphan_cleanup.conf`: `USER_MAIL_AD_URI`, `USER_MAIL_AD_BASE_DN`,
+  `USER_MAIL_AD_TIMEOUT` (from the site overlay; empty = AD lookup off),
+  rendered by `50_setup_nodes.sh`.
+- `scripts/fix_user_mail_ad_inplace.sh`: in-place hotfix (dry-run, `--commit`,
+  `--rollback`, `--check`/`--check-notified` to measure map/ad/pattern counts).
+- `tests/test_user_email_resolver.sh` (48 checks, in CI).
+
 ### Added (agent guardrails)
 
 - `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash

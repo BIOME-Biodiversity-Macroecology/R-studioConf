@@ -22,6 +22,12 @@ MAIL_DOMAINS_USER="example.org students.example.org"
 # Space-separated internal DNS resolvers used for SMTP MX lookups.
 SMTP_DNS_SERVERS="192.0.2.10 192.0.2.11"
 
+# User e-mail from Active Directory: LDAP URI and search base of the AD that
+# holds the user accounts. The host keytab (domain join) is used to bind.
+# Leave empty to keep the old behaviour (map file, then MAIL_DOMAINS_USER).
+USER_MAIL_AD_URI="ldap://ad.example.org"
+USER_MAIL_AD_BASE_DN="dc=ad,dc=example,dc=org"
+
 # Contact address shown in notifications / portal footer.
 BIOME_CONTACT="ops@example.org"
 

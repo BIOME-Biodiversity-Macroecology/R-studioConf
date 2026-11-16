@@ -8,12 +8,15 @@
 # Format: <username>  <email>   (one per row; separator = spaces/tabs)
 # Blank lines and lines starting with '#' are ignored.
 #
-# DEFAULT BEHAVIOUR (no entry here):
-#   resolve_user_email() uses MAIL_DOMAINS_USER (setup_nodes.vars.conf) and
-#   notifies every active domain. The relay silently absorbs bounces.
+# DEFAULT BEHAVIOUR (no entry here), see docs/adr/0010-*.md:
+#   resolve_user_email_source() asks AD for the account's `mail` attribute
+#   (when USER_MAIL_AD_URI / USER_MAIL_AD_BASE_DN are set); if AD has no
+#   answer it falls back to MAIL_DOMAINS_USER and notifies every active
+#   domain. The relay silently absorbs bounces of those guesses.
 #
 # ADD AN OVERRIDE WHEN:
-#   - the AD username != the email local-part (service accounts, legacy aliases)
+#   - the account has no `mail` in AD, or AD holds the wrong address
+#   - the AD username != the email local-part and AD lookup is off
 #   - you want to force a SINGLE address
 #   - a user asks not to receive copies on multiple domains
 #

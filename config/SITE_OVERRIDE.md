@@ -33,6 +33,9 @@ clone fails fast instead of half-joining a domain with placeholder data.
 `setup_nodes.vars.conf` stays committed; only its 6 sensitive keys (SMTP_HOST,
 SENDER_EMAIL, MAIL_DOMAIN, MAIL_DOMAINS_USER, SMTP_DNS_SERVERS, BIOME_CONTACT)
 are sanitized and overridden by `site/setup_nodes.site.vars.conf`.
+The site file may also set the optional AD e-mail lookup keys `USER_MAIL_AD_URI`,
+`USER_MAIL_AD_BASE_DN` and `USER_MAIL_AD_TIMEOUT` (ADR-0010). They are rendered
+into `/etc/biome-calc/conf/r_orphan_cleanup.conf` only; empty means AD lookup off.
 
 ## First-time setup on a host
 
