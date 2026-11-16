@@ -25,6 +25,116 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
 - Known risk: MkDocs 1.x is frozen and Material is in maintenance mode;
   exit path (Zensical or Sphinx) is recorded in the ADR.
 
+### Added (agent guardrails)
+
+- `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash
+  command (invisible/bidi characters removed, NFKC, quotes stripped) and then
+  **denies** catastrophic commands (`rm -rf` on system or home paths, `mkfs`, `dd`
+  to a block device, download piped to a shell, keytab/shadow reads, secret
+  exfiltration) and **asks** a human before production-changing ones (`git push`,
+  `systemctl restart/stop`, PAM/SSSD/Kerberos/nginx config writes, `realm leave`,
+  package changes, the orchestrators and the in-place hotfixes). Fails closed to
+  "ask" (also when `grep -E` is broken). Before matching, commands are
+  canonicalised: newlines become `;`, `bash -c`/`sh -c`/`eval` are unwrapped,
+  wrappers (`sudo`/`doas` with options, `env`, `command`, `exec`, `nohup`,
+  `nice`, `timeout`, `VAR=val`) and the directory of the command word
+  (`/usr/bin/rm`) are dropped. Pattern adapted from OpenHands software-agent-sdk (MIT).
+- `.claude/settings.json`: `deny` on site secrets, `.env.local`/`.env.prod*`,
+  SSH private keys, keys and keytabs (aligned with Infra-Iam-PKI); `ask` list; `git reset *` no longer pre-approved.
+- `tests/unit/test_agent_guard.bats` + `tests/fixtures/agent_guard/`: 83-command
+  corpus (44 deny, 31 ask, 36 allow; includes the 13 bypasses found in review:
+  wrappers, absolute paths, mixed `rm` flags, `/etc/ssh`-style descendants,
+  `/dev/mmcblk0`, partition creation, `sudo grep` on shadow, `--data-binary`,
+  `.env.local`, multiline commands) and a mutation test proving every rule is
+  covered.
+
+### Changed (CI hygiene, aligned with Infra-Iam-PKI)
+
+- Every `uses:` pinned to a commit SHA with the tag in a comment (14/14 including `release.yml`; was 0/14),
+  same `actions/checkout` pin as Infra-Iam-PKI; `ludeeus/action-shellcheck@master`
+  removed.
+- `permissions: contents: read`, `concurrency` and `timeout-minutes` on every
+  workflow/job.
+- ShellCheck now runs at severity **warning** (Infra-Iam-PKI level) through
+  `make shellcheck`, pinned to v0.11.0, with a ratchet baseline
+  (`tests/lint/shellcheck-baseline.txt`, 50 findings, may only shrink); errors
+  always fail. The advisory `shellcheck … || true` job in `ai-context.yml` is gone.
+- actionlint v1.7.12 (checksum-verified) on every workflow change.
+- `make lint` = `audit` + `shellcheck` + `actionlint` + `unit`: one command that
+  reproduces the fast CI gates locally.
+
+### Changed (T2 upstream image pins, applied by hand from Dependabot #56 and #57)
+
+- `docker-deploy/docker-compose.yml`: `curlimages/curl` 8.22.0 → 8.23.0
+  (`rstudio-init`). `docker-deploy/Dockerfile.nginx`: `nginx` 1.31.0-alpine →
+  1.31.7-alpine. `docker-deploy/Dockerfile.ollama`: `ollama/ollama` 0.35.1 →
+  0.40.15. The agent files were regenerated with `.ai/generate.sh`, which the
+  bot cannot do (ROADMAP WS-0.2, default B), so its own PRs stay red on
+  `generate.sh --check`. T2-only: no T1 host file changes. Rollback: revert
+  this commit and rebuild the three images.
+
+### Changed (problem report: the reporter is always known)
+
+- The "Report a Problem" form requires an email, and `telemetry_api.py`
+  rejects a report without a valid `user_contact` (422). The mail's `Reply-To`
+  is the researcher. On 2026-11-03 a report from biome-calc01 arrived with
+  "User Contact: Not provided" and five RStudio users active, so it could not
+  be followed up.
+- The portal remembers the login it verified with `/auth-check` (cleared on
+  logout); the form pre-fills the email from it and sends it as `portal_user`.
+  The mail shows it, cross-checked against the `rsession` owners on the host.
+  It is not authenticated by the API: a hint, not proof, and the mail says
+  "NOT verified". Logout, or a login by a different user on the same browser,
+  clears the saved contact, so a report never carries the previous person's
+  email.
+- T2 mirrors T1: same change in `docker-deploy/assets/biome-portal.js`,
+  `docker-deploy/templates/portal_index.html.template` and
+  `docker-deploy/scripts/telemetry/telemetry_api.py`.
+- Impact: T1 portal page and telemetry API, T2 mirror. A report without an
+  email is no longer accepted; an old cached page that omits it gets a 422.
+- Risk: low. Not yet tested on a host (calc04 first).
+- Deploy: `sudo bash scripts/31_setup_web_portal.sh` and
+  `sudo bash scripts/40_install_telemetry.sh`. Rollback: `git revert` of the
+  commit and the same two scripts.
+
+### Fixed (T1 package sync: "Argument list too long" in the plan step)
+
+- `scripts/biome_pkg_sync.sh` failed in the plan step on the hosts with
+  `line 198: /usr/bin/awk: Argument list too long` (exit 126, seen on
+  biome-calc04 on 2026-11-14 with `--plan`). The list of every `r-cran-*` name
+  in the apt repositories was passed to awk as one `-v` argument, and Linux
+  limits one argument to 128 KiB. The manifest was published before the
+  failure, so `--status` kept working while the nightly plan after 03:30 could
+  not run: no plan, no report, nothing installed, in `dry-run` and in `apply`.
+  The name lists now reach awk as files (process substitution), and the
+  manifest and report JSON reach jq with `--slurpfile` instead of `--argjson`
+  (same limit, reached at roughly 1700 installed packages). No behaviour
+  change otherwise. Test: `tests/test_biome_pkg_sync.sh` S21a-c (9000
+  repository names, 6000 installed packages); the old code fails all three.
+  - Impact: T1 only, one script. Risk: low, same plan logic, all 38 test cases pass.
+  - Deploy: `git pull` on the host; the timer runs the script from the checkout.
+  - Rollback: `git revert` of this commit (the sync then fails again as before).
+
+### Added (docs — DevOps troubleshooting guide)
+
+- `docs/operations/DEVOPS_TROUBLESHOOTING_GUIDE.md`: troubleshooting method for
+  operators. Layered triage for "a user cannot use RStudio", reference values
+  (session timeouts, tool thresholds, `ps` states of a resuming rsession, NFS
+  signals), the escalation ladder for a session that will not resume, how to find
+  the host event that suspended it, and the 2026-10-28 biome-calc01 incident as a
+  worked example (unattended-upgrades + needrestart restarted rstudio-server at
+  06:26; an 802 MB suspended environment kept a researcher on "Loading…"), how to
+  check the user is back in, rsession ignoring SIGTERM, checking the backup as
+  the user, reloading objects from a moved payload with `load()`, and the
+  one-rsession-per-user trap (a stuck rsession absorbs every new login: check the
+  rsession log for `Reading rsession configuration`, then `kill -9`).
+- `TROUBLESHOOTING.md` §1.8 (new: RStudio stays on "Loading…" or "R is taking
+  longer to start than usual"; includes the read-only check of the ADR-0007 host
+  protection), §0/§1.1/§8.1 linked to it; `DIAGNOSTICS_INDEX.md` postmortem values,
+  known gaps and two quick-table rows; `diagnostic_logs.md` RStudio per-user state
+  and host-event logs; researcher-side advice in `COMMON_PROBLEMS.md` §12; wiki
+  manifest and the `ops-troubleshooting` / `user-common-problems` docx rebuilt.
+  Documentation only: no script or host change.
 ### Fixed (T2 nightly build: transient step-cli download failure)
 
 - The step-cli download in `docker-deploy/Dockerfile.sssd`, `Dockerfile.samba`
