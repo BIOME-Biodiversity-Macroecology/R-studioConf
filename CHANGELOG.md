@@ -8,6 +8,17 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (consumer contract with Infra-Iam-PKI)
+
+- `tests/contract/consumer_pki.sh` + `make contract-pki PKI=<checkout>`: runs
+  Infra-Iam-PKI's own rstudio gates (`sync_rstudioconf.sh --update/--check`,
+  `.ai/validate.sh --ci`, `docker compose config` for sssd and samba) against this
+  commit, on a throw-away copy of the consumer. Proven to fail on three mutations:
+  a vendored tool removed, an image moved to `:latest`, a broken compose service.
+- `.github/workflows/consumer-contract.yml`: runs it on PRs touching
+  `docker-deploy/`, `kubernetes-deploy/` or the 14 vendored host tools, weekly,
+  and on demand. Read-only checkout of the consumer; not a required check yet.
+
 ### Added (agent guardrails)
 
 - `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash
