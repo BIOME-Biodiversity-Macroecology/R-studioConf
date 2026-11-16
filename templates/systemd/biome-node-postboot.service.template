@@ -1,0 +1,17 @@
+# templates/systemd/biome-node-postboot.service.template
+# Rendered by scripts/biome_node_maintenance.sh --install-timer (ADR-0009).
+# Runs at every boot; acts only after a reboot requested by the maintenance
+# job (marker /var/lib/biome-node-maintenance/reboot_requested), otherwise it
+# exits at once.
+[Unit]
+Description=BIOME check after a maintenance reboot (ADR-0009)
+Wants=network-online.target
+After=network-online.target remote-fs.target sssd.service rstudio-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %%SCRIPT%% --post-boot
+TimeoutStartSec=15min
+
+[Install]
+WantedBy=multi-user.target
