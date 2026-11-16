@@ -49,11 +49,11 @@ Profiles are `sssd`, `samba`, `portal`, `oidc`, and `ai`. All services except `d
 
 Current upstream image pins visible in code are:
 
-- `curlimages/curl:8.22.0`
+- `curlimages/curl:8.23.0`
 - `tecnativa/docker-socket-proxy:v0.5.0`
 - `quay.io/oauth2-proxy/oauth2-proxy:v7.6.0-alpine`
 - `rocker/geospatial:4.6.0` in the RStudio Dockerfiles (same R as T1)
-- `ollama/ollama:0.35.1` in the Ollama Dockerfile
+- `ollama/ollama:0.40.15` in the Ollama Dockerfile
 
 Locally built images use `${IMAGE_TAG}` and production deployments must set a pinned tag.
 
