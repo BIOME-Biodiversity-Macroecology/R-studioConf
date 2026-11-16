@@ -8,6 +8,17 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Documentation (RStudio session hangs at start: roadmap and hotfix register)
+
+- Roadmap WS-1.6: "R is taking longer to start than usual" after login
+  (reported 2026-11-11). Host check of 2026-11-14, rollout of ADR-0007 to
+  calc01-03 the same day; an `rsession-path` quarantine wrapper is gated on a
+  confirmed diagnosis. The runbook entry for the symptom is in
+  `docs/operations/TROUBLESHOOTING.md`.
+- `docs/operations/HOTFIX_REGISTER.md`: node maintenance timer applied on
+  calc04 (2026-11-03) and calc01-03 (2026-11-14).
+- Documentation only: no script or host change. Rollback: revert the commit.
+
 ### Added (user e-mail from Active Directory, ADR-0010)
 
 - `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`
