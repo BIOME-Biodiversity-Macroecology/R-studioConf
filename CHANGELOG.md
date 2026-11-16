@@ -8,6 +8,21 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Changed (CI hygiene, aligned with Infra-Iam-PKI)
+
+- Every `uses:` pinned to a commit SHA with the tag in a comment (14/14 including `release.yml`; was 0/14),
+  same `actions/checkout` pin as Infra-Iam-PKI; `ludeeus/action-shellcheck@master`
+  removed.
+- `permissions: contents: read`, `concurrency` and `timeout-minutes` on every
+  workflow/job.
+- ShellCheck now runs at severity **warning** (Infra-Iam-PKI level) through
+  `make shellcheck`, pinned to v0.11.0, with a ratchet baseline
+  (`tests/lint/shellcheck-baseline.txt`, 50 findings, may only shrink); errors
+  always fail. The advisory `shellcheck … || true` job in `ai-context.yml` is gone.
+- actionlint v1.7.12 (checksum-verified) on every workflow change.
+- `make lint` = `audit` + `shellcheck` + `actionlint` + `unit`: one command that
+  reproduces the fast CI gates locally.
+
 ### Changed (T2 upstream image pins, applied by hand from Dependabot #56 and #57)
 
 - `docker-deploy/docker-compose.yml`: `curlimages/curl` 8.22.0 → 8.23.0
