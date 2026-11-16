@@ -8,6 +8,23 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (docs site and CI link gate — ADR-0001)
+
+- `docs/adr/` with template (from `Proxmox_biome_log_collector`) and
+  ADR-0001: render `docs/` with MkDocs 1.6.1 + Material 9.7.6 (pinned) in
+  strict mode as a CI gate; GitHub Wiki not used; Read the Docs, Sphinx,
+  Zensical and mdBook considered and rejected for now, with reasons.
+- `mkdocs.yml`, `scripts/tools/docs_site/` (pinned requirements, link hook
+  rewriting links to files outside `docs/` into GitHub URLs only when the
+  target exists), GitHub-compatible heading slugs, no Google Fonts (HC-11).
+- `.github/workflows/docs.yml`: strict build on docs PRs plus
+  `tests/docs_site_test.sh` (real tree and negative controls: broken page
+  link, broken anchor and missing outside file must each fail). Rendered site
+  uploaded as a run artifact. GitHub Pages deploy is opt-in via the
+  `DOCS_PAGES_ENABLED` repository variable and is **not** enabled.
+- Known risk: MkDocs 1.x is frozen and Material is in maintenance mode;
+  exit path (Zensical or Sphinx) is recorded in the ADR.
+
 ### Added (agent guardrails)
 
 - `.claude/hooks/guard.sh`: PreToolUse hook for AI agents. It normalises each Bash
