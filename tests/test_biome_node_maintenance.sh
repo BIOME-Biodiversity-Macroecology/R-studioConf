@@ -3,7 +3,7 @@ set -euo pipefail
 # tests/test_biome_node_maintenance.sh — scripts/biome_node_maintenance.sh (ADR-0007)
 #
 # pgrep, ps, id, systemctl, unattended-upgrade, needrestart, apt-get, apt-config,
-# logger, hostname, sleep, uname, mountpoint, kinit, ldapsearch and send_email.sh
+# logger, hostname, sleep, uname, mountpoint and send_email.sh
 # are stubbed on PATH; state, systemd and needrestart dirs
 # are fakes under mktemp. flock and perl are real. Never touches apt, systemd
 # or /var.
@@ -120,16 +120,6 @@ echo "MAIL to=${to} subj=${subj}" >> "$STUB_LOG"
 cat "$body" >> "$STUB_LOG.mail"
 exit "${STUB_MAIL_RC:-0}"
 EOF
-cat > "$T/bin/kinit" <<'EOF'
-#!/usr/bin/env bash
-echo "kinit $* cc=${KRB5CCNAME:-}" >> "$STUB_LOG"
-EOF
-cat > "$T/bin/ldapsearch" <<'EOF'
-#!/usr/bin/env bash
-echo "ldapsearch ${*: -2}" >> "$STUB_LOG"
-[[ -n "${STUB_AD_MAIL:-}" ]] && printf 'dn: CN=x\nmail: %s\n' "$STUB_AD_MAIL"
-exit 0
-EOF
 cat > "$T/bin/uname" <<'EOF'
 #!/usr/bin/env bash
 echo "${STUB_UNAME:-6.8.0-50-generic}"
@@ -146,7 +136,7 @@ reset_env() {
   mkdir -p "$T/state" "$T/systemd" "$T/nr"
   : > "$T/log"; echo 0 > "$T/sess"
   unset STUB_R STUB_APT_BUSY STUB_UU_RUNNING STUB_SESS_AFTER_UU STUB_UU_RC STUB_KSTA STUB_NR_RSTUDIO STUB_UU_PERIODIC STUB_RESTART_FAIL STUB_APT_TIMER \
-        STUB_KEXP STUB_INACTIVE STUB_REBOOT_FAIL STUB_SESS_AFTER_SLEEP STUB_MAIL_RC STUB_AD_MAIL STUB_UNAME STUB_UNMOUNTED
+        STUB_KEXP STUB_INACTIVE STUB_REBOOT_FAIL STUB_SESS_AFTER_SLEEP STUB_MAIL_RC STUB_UNAME STUB_UNMOUNTED
 }
 run() {  # args...
   set +e
@@ -156,7 +146,7 @@ run() {  # args...
          MAINT_NOW="${NOW:-0345}" MAINT_TODAY="${TODAY:-2026-10-29}" \
          MAINT_REBOOT_RECHECK_SECONDS=0 MAINT_POSTBOOT_TIMEOUT=0 \
          MAINT_REBOOT_REQUIRED_FILE="$T/reboot-required" MAINT_EMAIL_MAP="$T/map" MAINT_FSTAB="$T/fstab" \
-         MAINT_MAIL_CONF="${MAINT_MAIL_CONF:-$T/mail.conf}" MAINT_MAIL_HELPERS="$HELPERS" \
+         MAINT_MAIL_CONF="${MAINT_MAIL_CONF:-$T/mail.conf}" MAINT_MAIL_HELPERS="${MAINT_MAIL_HELPERS:-$HELPERS}" \
          bash "$SUT" "$@" 2>&1)"
   # shellcheck disable=SC2034  # read inside the eval'd check strings
   RC=$?
@@ -180,6 +170,15 @@ SMTP_HOST="smtp.example.org"; SMTP_PORT="25"; SENDER_EMAIL="calc@example.org"; D
 MAIL_DOMAIN="example.org"; MAIL_DOMAINS_USER="example.org students.example.org"
 ADMIN_EMAIL="admin@example.org"
 EOF
+cat > "$T/helpers_v2.sh" <<'EOS'
+resolve_admin_recipients() { echo "$1"; }
+resolve_user_email_source() {
+  case "$1" in
+    martina.livornese2) echo "martina.livornese2@unibo.example ad" ;;
+    mario.rossi)        echo "m.rossi@example.org map" ;;
+  esac
+}
+EOS
 printf '%s\n' "srv:/export/home /nfs/home nfs4 defaults 0 0" "srv:/x /mnt/x nfs noauto 0 0" "/dev/sda1 / ext4 defaults 0 1" > "$T/fstab"
 
 echo "## gates"
@@ -323,10 +322,8 @@ reset_env; blockers_fixture; echo 1 > "$T/sess"; echo 2026-10-24 > "$T/state/reb
 check '[[ "$(mails)" == 0 ]]' "--force-window (supervised): no emails"
 
 reset_env; blockers_fixture; echo 1 > "$T/sess"; echo 2026-10-24 > "$T/state/reboot_pending_since"
-printf '%s\n' "# comment" "martina.livornese2 m.livornese@example.org" > "$T/map"
-MAINT_REBOOT=true MAINT_NOTIFY_USERS_NIGHTS=5 MAINT_AD_LDAP_URI=ldap://ad.example.org MAINT_AD_BASE_DN=dc=x STUB_AD_MAIL=mario.rossi7@example.org run
-check 'grep -q "^MAIL to=m.livornese@example.org " "$T/log" && grep -q "address from map" "$T/log"' "user_email_map.txt wins over AD"
-check 'grep -q "^MAIL to=mario.rossi7@example.org " "$T/log" && grep -q "address from ad" "$T/log" && grep -q "^kinit -k CALC-TEST\$ cc=FILE:" "$T/log"' "AD mail attribute used with the node keytab and a private cache"
+MAINT_REBOOT=true MAINT_NOTIFY_USERS_NIGHTS=5 MAINT_MAIL_HELPERS="$T/helpers_v2.sh" run
+check 'grep -q "^MAIL to=martina.livornese2@unibo.example " "$T/log" && grep -q "martina.livornese2 .*address from ad" "$T/log" && grep -q "^MAIL to=m.rossi@example.org " "$T/log" && grep -q "mario.rossi .*address from map" "$T/log"' "shared helper with resolve_user_email_source (ADR-0010): its address and source are used"
 
 reset_env; blockers_fixture; echo 1 > "$T/sess"; echo 2026-10-24 > "$T/state/reboot_pending_since"
 MAINT_REBOOT=true MAINT_NOTIFY_USERS_NIGHTS=5 MAINT_MAIL_CONF="$T/missing.conf" run

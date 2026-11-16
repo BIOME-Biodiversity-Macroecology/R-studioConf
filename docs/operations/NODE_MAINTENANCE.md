@@ -85,16 +85,18 @@ MAINT_REBOOT=true
 MAINT_REBOOT_DAYS="1"            # date +%u: calc04 1 (Mon), calc03 2, calc02 3, calc01 4
 MAINT_NOTIFY_ADMIN_NIGHTS=3      # 0 = off
 MAINT_NOTIFY_USERS_NIGHTS=5      # 0 = off; needs MAINT_REBOOT=true
-MAINT_AD_LDAP_URI="ldap://<ad domain>"
-MAINT_AD_BASE_DN="dc=...,dc=..."
 ```
+
+User addresses come from the shared resolver in
+`/etc/biome-calc/script/orphan_cleanup_helpers.sh`. Its AD lookup (ADR-0010)
+is configured in the setup site file, not here.
 
 Prerequisites on the host:
 
 - the R orphan notifier's mail setup is deployed
   (`/etc/biome-calc/conf/r_orphan_cleanup.conf`,
   `/etc/biome-calc/script/orphan_cleanup_helpers.sh` and `send_email.sh`);
-- `ldap-utils` is installed (only for the AD lookup);
+- for AD addresses: the ADR-0010 resolver is deployed and `ldap-utils` is installed;
 - after `git pull`, run `--install-timer` again: it adds
   `biome-node-postboot.service`. It is idempotent.
 

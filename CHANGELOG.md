@@ -26,19 +26,20 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
     and average CPU share;
   - email to each blocking user after `MAINT_NOTIFY_USERS_NIGHTS` with a reboot
     pending (save, quit, use another node).
-  The addresses come from `user_email_map.txt`, then the AD `mail` attribute
-  (node keytab), then the `MAIL_DOMAINS_USER` pattern; the source is logged.
-  The mail setup is the one the R orphan notifier already deploys.
+  The addresses come from the shared resolver in `orphan_cleanup_helpers.sh`:
+  map, then AD `mail` once ADR-0010 is deployed, then the `MAIL_DOMAINS_USER`
+  pattern. The source is logged. The mail setup is the one the R orphan
+  notifier already deploys.
 - `--plan` lists who blocks the node and the address each user would get.
   `--status` shows the reboot state and the last post-boot check.
   `last_report.json` is now schema 2, with `reboot` and `reboot_pending_since`.
-- `scripts/50_setup_nodes.sh`: `ldap-utils` added to the base packages (AD lookup).
+- `scripts/50_setup_nodes.sh`: `ldap-utils` added to the base packages (AD lookup, ADR-0010).
 - Impact: none until enabled. All new settings default to off, and the timer
   runs the script from the checkout, so a `git pull` changes no behaviour. Run
   `--install-timer` again to add the post-boot unit.
 - Rollback: set `MAINT_REBOOT=false` and `MAINT_NOTIFY_*=0` in the site file, or
   run `--remove-timer`.
-- Tests: `tests/test_biome_node_maintenance.sh` grows from 32 to 71 cases
+- Tests: `tests/test_biome_node_maintenance.sh` grows from 32 to 70 cases
   (reboot gates, boot-loop guard, emails, address sources, post-boot).
 
 ### Added (user e-mail from Active Directory, ADR-0010)

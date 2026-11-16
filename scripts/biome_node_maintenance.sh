@@ -239,37 +239,28 @@ admin_recipients() {
 }
 
 # Address of a person, and where it came from: "map", "ad" or "pattern".
-# "pattern" (user@domain) is never verified: the relay drops bounces silently.
-ad_mail() {  # USER -> address from AD (attribute mail) with the node keytab, or nothing
-  local u="$1" dir out
-  [[ -n "$MAINT_AD_LDAP_URI" && -n "$MAINT_AD_BASE_DN" ]] || return 0
-  [[ "$u" =~ ^[A-Za-z0-9._-]+$ ]] || return 0      # no LDAP filter injection
-  command -v kinit >/dev/null 2>&1 && command -v ldapsearch >/dev/null 2>&1 || return 0
-  dir="$(mktemp -d)"
-  out="$(
-    export KRB5CCNAME="FILE:${dir}/cc"
-    kinit -k "$(host_s | tr '[:lower:]' '[:upper:]')\$" >/dev/null 2>&1 \
-      && timeout 20 ldapsearch -LLL -o ldif-wrap=no -Y GSSAPI -Q -H "$MAINT_AD_LDAP_URI" -b "$MAINT_AD_BASE_DN" \
-           "(sAMAccountName=${u})" mail 2>/dev/null
-  )" || true
-  rm -rf "$dir"
-  awk -F': ' 'tolower($1)=="mail" && $2 ~ /@/ { print $2; exit }' <<<"$out"
-}
-
+# The lookup lives in the shared helper (ADR-0010, orphan_cleanup_helpers.sh):
+# resolve_user_email_source prints "<address> <source>" (map, then AD `mail`
+# with the node keytab, then the MAIL_DOMAINS_USER pattern). With an older
+# helper that only has resolve_user_email, the source is "map" when the
+# user_email_map.txt override is used, else "pattern". "pattern" is never
+# verified: the relay drops bounces silently.
 user_email() {  # USER -> "address source"
-  local u="$1" a
-  if [[ -f "$EMAIL_MAP" ]]; then
-    a="$(awk -v u="$u" '$1 !~ /^#/ && $1 == u { print $2; exit }' "$EMAIL_MAP")"
-    [[ "$a" == *@* ]] && { echo "$a map"; return 0; }
-  fi
-  a="$(ad_mail "$u")"
-  [[ -n "$a" ]] && { echo "$a ad"; return 0; }
-  a="$( ( set +u
-          # shellcheck source=/dev/null
-          source "$MAINT_MAIL_CONF" && source "$MAINT_MAIL_HELPERS" || exit 1
-          resolve_user_email "$u" "${MAIL_DOMAIN:-}" ) 2>/dev/null || true)"
-  [[ -n "$a" ]] && echo "$a pattern"
-  return 0
+  ( set +u
+    # shellcheck source=/dev/null
+    source "$MAINT_MAIL_CONF" && source "$MAINT_MAIL_HELPERS" || exit 1
+    if declare -F resolve_user_email_source >/dev/null; then
+      resolve_user_email_source "$1" "${MAIL_DOMAIN:-}"
+      exit 0
+    fi
+    a="$(resolve_user_email "$1" "${MAIL_DOMAIN:-}")"
+    [[ -n "$a" ]] || exit 0
+    if [[ -f "$EMAIL_MAP" ]] && awk -v u="$1" '$1 !~ /^#/ && $1 == u { f = 1 } END { exit !f }' "$EMAIL_MAP"; then
+      echo "$a map"
+    else
+      echo "$a pattern"
+    fi
+  ) 2>/dev/null || true
 }
 
 notify_admin() {  # NIGHTS REASON
