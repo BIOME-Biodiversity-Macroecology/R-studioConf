@@ -101,6 +101,12 @@ What production logs, in `/var/log/biome-log/r_orphan_cleanup/notify.log`:
 ... | WARN | Address not verified (no map entry, no AD mail). user=U | to=ADDR
 ```
 
+Maintenance drain/escalation notices (ADR-0009, once enabled) log to the journal with
+tag `biome-node-maintenance`, one line per mail:
+`user email sent: <user> -> <addr> (address from map|ad|pattern)`. Read them with
+`journalctl -t biome-node-maintenance | grep "address from"`. `biome_node_maintenance.sh --plan`
+prints each blocking user's address and source without sending anything.
+
 Count the guesses since a given date:
 
 ```bash
