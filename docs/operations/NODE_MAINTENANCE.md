@@ -89,14 +89,18 @@ MAINT_NOTIFY_USERS_NIGHTS=5      # 0 = off; needs MAINT_REBOOT=true
 
 User addresses come from the shared resolver in
 `/etc/biome-calc/script/orphan_cleanup_helpers.sh`. Its AD lookup (ADR-0010)
-is configured in the setup site file, not here.
+is configured in the setup site file, not here. Configuration, measurement and
+the reasons for a fallback to `pattern` are in
+[USER_MAIL_AD.md](USER_MAIL_AD.md).
 
 Prerequisites on the host:
 
 - the R orphan notifier's mail setup is deployed
   (`/etc/biome-calc/conf/r_orphan_cleanup.conf`,
   `/etc/biome-calc/script/orphan_cleanup_helpers.sh` and `send_email.sh`);
-- for AD addresses: the ADR-0010 resolver is deployed and `ldap-utils` is installed;
+- for AD addresses: the ADR-0010 resolver is deployed and `ldap-utils` is
+  installed (both done on calc01-04 on 2026-11-17, see
+  [USER_MAIL_AD.md](USER_MAIL_AD.md) §2);
 - after `git pull`, run `--install-timer` again: it adds
   `biome-node-postboot.service`. It is idempotent.
 
@@ -109,7 +113,9 @@ sudo bash scripts/biome_node_maintenance.sh --plan
 `--plan` shows: whether a reboot is needed, the expected and running kernel,
 whether today is a reboot day, who blocks the node, and, with user emails on,
 the address each user would get and where it came from (`map`, `ad`, or
-`pattern`, which is not verified).
+`pattern`, which is not verified). Every sent email is logged in the journal
+with its source:
+`journalctl -t biome-node-maintenance | grep "address from"`.
 
 Supervised first reboot: `sudo bash scripts/biome_node_maintenance.sh --force-window`.
 It ignores the window and the reboot day, never the session check or

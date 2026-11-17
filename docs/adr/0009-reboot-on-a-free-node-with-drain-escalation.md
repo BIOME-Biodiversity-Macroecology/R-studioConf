@@ -68,14 +68,15 @@ back.
 5. **Mail reuses the R orphan notifier.** It uses the same relay, sender and
    admin recipients (`/etc/biome-calc/conf/r_orphan_cleanup.conf`), the same
    `send_email.sh`, and the same address resolver in
-   `orphan_cleanup_helpers.sh`. With ADR-0010 (PR #65) that resolver tries, in
+   `orphan_cleanup_helpers.sh`. With ADR-0010 (merged in PR #65) that resolver tries, in
    order: the `user_email_map.txt` override, the AD attribute `mail` read with
    the node keytab, and the `MAIL_DOMAINS_USER` pattern. It reports which one it
    used. This script has no AD code of its own. With an older helper it falls
    back to the map, then the pattern.
 
    The source of each address is logged. A `pattern` address is not verified,
-   and the relay drops bounces silently.
+   and the relay drops bounces silently. Runbook for the resolver:
+   [USER_MAIL_AD.md](../operations/USER_MAIL_AD.md).
 
 ## Consequences
 
@@ -92,8 +93,9 @@ back.
   the node beforehand.
 - A node that does not come back needs the Proxmox console. The post-boot
   check reports the cases it can see.
-- New dependency for the ADR-0010 AD lookup: `ldap-utils`. It is in the
-  `50_setup_nodes.sh` base packages; existing hosts need `apt install ldap-utils`.
+- The ADR-0010 AD lookup needs `ldap-utils`. It is in the `50_setup_nodes.sh`
+  base packages, and it was installed on calc01-04 with the ADR-0010 hotfix on
+  2026-11-17.
 - A suspended RStudio session is never used to move work. Restoring a 765 MB
   suspended environment is what blocked a login on 2026-10-28. Users are asked
   to save and restart instead.
