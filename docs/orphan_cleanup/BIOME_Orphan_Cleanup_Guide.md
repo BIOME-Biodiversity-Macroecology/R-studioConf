@@ -30,6 +30,7 @@ The following committed values are sanitized examples and must be supplied throu
 - `SENDER_EMAIL`
 - `MAIL_DOMAIN`
 - `MAIL_DOMAINS_USER`
+- `USER_MAIL_AD_URI`, `USER_MAIL_AD_BASE_DN` (optional, AD e-mail lookup; empty = off)
 - `SMTP_DNS_SERVERS`
 - `BIOME_CONTACT`
 
@@ -91,11 +92,43 @@ Important source discrepancy: the generated configuration receives `KILL_TIMEOUT
 
 ## Email resolution
 
-`orphan_cleanup_helpers.sh` resolves recipients in this order:
+`orphan_cleanup_helpers.sh` resolves user recipients in this order
+([ADR-0010](../adr/0010-user-email-from-active-directory.md)):
 
-1. explicit `user_email_map.txt` entry;
-2. every domain in `MAIL_DOMAINS_USER`, emitted as CSV;
-3. `username@MAIL_DOMAIN` fallback.
+1. `map`: explicit `user_email_map.txt` entry;
+2. `ad`: the AD `mail` attribute of the account, read with the host keytab
+   (`kinit -k HOSTNAME$`, `ldapsearch -Y GSSAPI`) in a private credential cache.
+   Runs only when `USER_MAIL_AD_URI` and `USER_MAIL_AD_BASE_DN` are set in
+   `r_orphan_cleanup.conf`; `kinit` and `ldapsearch` each stop after
+   `USER_MAIL_AD_TIMEOUT` seconds (default 10). The DCs are taken from the
+   `_ldap._tcp` SRV record of the URI's host and queried by FQDN with
+   `ldapsearch -N` (no reverse DNS), at most `USER_MAIL_AD_MAX_DCS` (3).
+   Any failure falls through;
+3. `pattern`: every domain in `MAIL_DOMAINS_USER` as CSV, else
+   `username@MAIL_DOMAIN`. Not verified: the relay drops wrong addresses silently.
+
+`resolve_user_email_source USER DOMAIN` prints `<address> <source>`;
+`resolve_user_email` prints the address only. `notify.log` records the source on
+every `SENDING` line and writes a `WARN ... not verified` line for `pattern`.
+The AD step needs `ldap-utils` and root (the notify cron runs as root).
+
+On an existing host, apply it in place:
+
+```bash
+sudo bash scripts/fix_user_mail_ad_inplace.sh --check-notified   # baseline: TOTAL n map=a ad=b pattern=c
+sudo bash scripts/fix_user_mail_ad_inplace.sh                    # dry-run
+sudo bash scripts/fix_user_mail_ad_inplace.sh --commit           # backup in /var/backups/biome-calc/user-mail-ad-hotfix-<ts>/
+sudo bash scripts/fix_user_mail_ad_inplace.sh --check-notified   # after: expect ad>0, pattern only for accounts without mail
+sudo bash scripts/fix_user_mail_ad_inplace.sh --rollback /var/backups/biome-calc/user-mail-ad-hotfix-<ts>
+```
+
+To see what a notice would look like and where it would go, without sending
+anything or touching `/etc`, run the real notify script with a fake
+`send_email.sh`:
+
+```bash
+sudo bash scripts/tools/simulate_user_notice.sh USER [USER...]   # prints notify.log (to=, source=) and the fake send calls
+```
 
 Administrative recipients can be supplied as a `file://` path, CSV, or one address. The deployed helper deduplicates addresses.
 

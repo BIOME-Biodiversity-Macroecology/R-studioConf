@@ -79,7 +79,7 @@ The two template functions are separate implementations with different placehold
 | `resolve_admin_recipients input` | Accepts `file:///path`, a CSV address list, or one address; file mode ignores comments and blank lines and emits CSV. |
 | `resolve_user_email username default_domain` | Checks `${BIOME_CONF}/conf/user_email_map.txt` for a whitespace-separated override, then returns `username@default_domain`. |
 
-The deployed orphan subsystem also ships `templates/orphan_cleanup_helpers.sh.template`, whose `resolve_user_email` adds `MAIL_DOMAINS_USER` multi-domain behavior. The duplication is real and remains an open consolidation item.
+The deployed orphan subsystem also ships `templates/orphan_cleanup_helpers.sh.template`, which is the resolver every notification uses: `resolve_user_email_source` (map → AD `mail` attribute → `MAIL_DOMAINS_USER` pattern, prints `<address> <source>`), `resolve_user_email` (address only) and `ad_lookup_user_mail` ([ADR-0010](../adr/0010-user-email-from-active-directory.md)). The `lib/common_utils.sh` copy above has no caller and no AD step; the duplication remains an open consolidation item.
 
 ## Functions not present
 

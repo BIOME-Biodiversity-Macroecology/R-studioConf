@@ -20,6 +20,18 @@ MAIL_DOMAIN="${MAIL_DOMAIN}"
 # returns a CSV "user@d1,user@d2" when no override exists in user_email_map.txt
 MAIL_DOMAINS_USER="${MAIL_DOMAINS_USER}"
 
+# ── User e-mail from Active Directory ─────────────────────────
+# resolve_user_email_source() order: user_email_map.txt -> AD `mail`
+# attribute -> MAIL_DOMAINS_USER pattern. The AD step runs only when both
+# URI and base DN are set; it binds with the host keytab (GSSAPI) using a
+# private credential cache and falls back on any error or timeout.
+# A domain URI (ldap://<ad domain>) is expanded to its DCs via the
+# _ldap._tcp SRV record; optional USER_MAIL_AD_MAX_DCS (default 3).
+USER_MAIL_AD_URI="${USER_MAIL_AD_URI}"
+USER_MAIL_AD_BASE_DN="${USER_MAIL_AD_BASE_DN}"
+# Seconds, applied to kinit and to ldapsearch separately
+USER_MAIL_AD_TIMEOUT="${USER_MAIL_AD_TIMEOUT}"
+
 # ── Admin Recipients ──────────────────────────────────────────
 # Set to the recipients list deployed during setup
 ADMIN_EMAIL="file://${BIOME_CONF}/conf/admin_recipients.txt"

@@ -2242,8 +2242,12 @@ setup_nodes_orphan_cleanup() {
     local node_sender
     node_sender="noreply-$(hostname -s)@${MAIL_DOMAIN}"
     
-    export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN MAIL_DOMAINS_USER SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF
-    envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${MAIL_DOMAINS_USER} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
+    # AD mail lookup keys are optional (empty = disabled): default them so an
+    # older site overlay without them does not abort under set -u.
+    : "${USER_MAIL_AD_URI:=}" "${USER_MAIL_AD_BASE_DN:=}" "${USER_MAIL_AD_TIMEOUT:=10}"
+    export SMTP_HOST SMTP_PORT SENDER_EMAIL="${node_sender}" MAIL_DOMAIN MAIL_DOMAINS_USER SMTP_DNS_SERVERS="${dns_csv}" KILL_TIMEOUT BIOME_CONF \
+           USER_MAIL_AD_URI USER_MAIL_AD_BASE_DN USER_MAIL_AD_TIMEOUT
+    envsubst "\${SMTP_HOST} \${SMTP_PORT} \${SENDER_EMAIL} \${MAIL_DOMAIN} \${MAIL_DOMAINS_USER} \${SMTP_DNS_SERVERS} \${KILL_TIMEOUT} \${BIOME_CONF} \${USER_MAIL_AD_URI} \${USER_MAIL_AD_BASE_DN} \${USER_MAIL_AD_TIMEOUT}" < "${WORKSPACE_ROOT}/templates/r_orphan_cleanup.conf.template" > "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
     run_cmd chmod 644 "${BIOME_CONF}/conf/r_orphan_cleanup.conf"
   fi
 

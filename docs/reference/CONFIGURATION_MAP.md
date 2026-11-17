@@ -57,14 +57,14 @@ committed**. The repo ships `<name>.example`; the live host keeps real values in
 | `optimize_system.vars.conf` | `scripts/31_optimize_system.sh` | Nginx-side kernel/sysctl tuning. |
 | `r_env_manager.conf` | `r_env_manager.sh` | CRAN mirror + APT key, RStudio fallback version/arch, R user packages, GitHub PAT, min memory/disk. |
 | `setup_nodes.vars.conf` | `scripts/50_setup_nodes.sh`, `scripts/40_install_telemetry.sh` | Node-side config: hostnames, NFS/CIFS mounts, RAM/Tmp disk sizes, `BIOME_CONF`, orphan-cleanup cron, archive paths. Mail/SMTP/contact keys are sanitized here and overridden by `setup_nodes.site.vars.conf` ★. |
-| `setup_nodes.site.vars.conf` ★ | `scripts/50_setup_nodes.sh` (sourced after `setup_nodes.vars.conf`) | Real `SMTP_HOST` / `SENDER_EMAIL` / `MAIL_DOMAIN` / `MAIL_DOMAINS_USER` / `SMTP_DNS_SERVERS` / `BIOME_CONTACT`. |
+| `setup_nodes.site.vars.conf` ★ | `scripts/50_setup_nodes.sh` (sourced after `setup_nodes.vars.conf`) | Real `SMTP_HOST` / `SENDER_EMAIL` / `MAIL_DOMAIN` / `MAIL_DOMAINS_USER` / `SMTP_DNS_SERVERS` / `BIOME_CONTACT`; optional `USER_MAIL_AD_URI` / `USER_MAIL_AD_BASE_DN` / `USER_MAIL_AD_TIMEOUT` (AD e-mail lookup, rendered into `r_orphan_cleanup.conf`). |
 | `scopri_progetti_known.conf` ★ | `templates/scopri_progetti.sh.template` (deployed) | Known-project allowlist (`username:supervisor:project`) for project-discovery. |
 | `scopri_theme_map.conf` ★ | `templates/scopri_progetti.sh.template` (deployed) | Theme→supervisor inference map (`pattern;supervisor;theme`). Externalized from the template; no match → `_UNKNOWN_`. |
 
 | Auxiliary file | Consumed by | Purpose |
 |---|---|---|
 | `admin_recipients.txt` ★ | `50_setup_nodes.sh` (deploy), `99_check_pkg_drift.sh`, `telemetry_api.py` | One email/line — recipients of admin notifications (orphan reports, drift alerts, postmortem dumps). |
-| `user_email_map.txt` ★ | `50_setup_nodes.sh` (deploy), `resolve_user_email()` | `username  email` map for per-user notifications when AD lookup is unavailable. |
+| `user_email_map.txt` ★ | `50_setup_nodes.sh` (deploy), `resolve_user_email_source()` | `username  email` overrides; wins over the AD `mail` lookup ([ADR-0010](../adr/0010-user-email-from-active-directory.md)). |
 
 ---
 
