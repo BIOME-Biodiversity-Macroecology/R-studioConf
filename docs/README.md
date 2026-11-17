@@ -83,6 +83,7 @@ Descriptions state each file's role. They do not imply that every document has p
 - [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](operations/DEVOPS_TROUBLESHOOTING_GUIDE.md) — troubleshooting method: layered triage, reference values and thresholds, tool kit, worked example (suspended-session incident, 2026-10-28).
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.
 - [`DIAGNOSTICS_INDEX.md`](operations/DIAGNOSTICS_INDEX.md) — diagnostic and repair-tool index.
+- [`USER_MAIL_AD.md`](operations/USER_MAIL_AD.md) — user notice addresses from Active Directory (ADR-0010): configuration, metric, troubleshooting, rollback.
 - [`USER_SCRIPT_TROUBLESHOOTING.md`](operations/USER_SCRIPT_TROUBLESHOOTING.md) — HC-13 diagnostic ladder for unchanged user R scripts.
 - [`rstudio_session_isolation.md`](operations/rstudio_session_isolation.md) — why RStudio Server OSS allows one session per user across nodes (investigation record).
 - [`risposta_ricercatore_sessioni_rstudio.md`](operations/risposta_ricercatore_sessioni_rstudio.md) — Italian reply sent to a researcher on the same topic (internal record).

@@ -162,6 +162,13 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 - **Mutation:** dry-run by default. Commit/rollback only; backup `/root/login-script-hotfix-<timestamp>/`; no restart.
 - **Safety:** refuses an unexpected rendered file/path relationship unless `--force`.
 
+### `fix_user_mail_ad_inplace.sh`
+
+- **Use:** send user notices to the AD `mail` address instead of a guessed `username@domain` (ADR-0010). Runbook: [USER_MAIL_AD.md](USER_MAIL_AD.md).
+- **Flags:** `--commit`, `--rollback DIR`, `--uri URI`, `--base-dn DN`, `--timeout S`, `--check USER...`, `--check-notified`, `--help`.
+- **Mutation:** dry-run by default. Sets 3 keys in `r_orphan_cleanup.conf`, installs `orphan_cleanup_helpers.sh` and `notify_r_orphans.sh`; backup `/var/backups/biome-calc/user-mail-ad-hotfix-<timestamp>/`; atomic swap; no restart. `--check*` is read-only and prints the reason when AD gives no address.
+- **Safety:** refuses values with quotes, `$`, backticks or backslashes and URIs other than `ldap://`/`ldaps://`; syntax-checks before install and rolls back automatically if the installed files do not source.
+
 ## `scripts/tools/*`
 
 ### `build_wiki_docx.sh`
@@ -222,6 +229,13 @@ sudo su - <user> -c '/usr/local/bin/99_diagnose_user_script.sh --timeout 600 /pa
 
 - **Flags:** `--baseline=PATH`, `--json=PATH`, `--quiet`, `--update-baseline`, `--help`.
 - **Behavior:** detector version 1.0.0; compares package state and optionally updates the RDS baseline. Normally invoked through `99_check_pkg_drift.sh`.
+
+### `simulate_user_notice.sh`
+
+- **Use:** end-to-end test of a user notice: the real `notify_r_orphans.sh` and resolver from the checkout, a fake `send_email.sh`.
+- **Run:** `sudo bash scripts/tools/simulate_user_notice.sh USER [USER...]`; env `AD_URI`, `AD_BASE`, `CONF_SRC`.
+- **Mutation:** none outside `/tmp/user-notice-sim.*` (kept for inspection). Nothing is mailed.
+- **Output:** `notify.log` lines with `to=` and `source=map|ad|pattern`, the fake send command, the mail body.
 
 ## Deployed tools not matched by the requested file patterns
 

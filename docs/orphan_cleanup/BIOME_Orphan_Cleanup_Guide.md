@@ -110,6 +110,8 @@ Important source discrepancy: the generated configuration receives `KILL_TIMEOUT
 `resolve_user_email_source USER DOMAIN` prints `<address> <source>`;
 `resolve_user_email` prints the address only. `notify.log` records the source on
 every `SENDING` line and writes a `WARN ... not verified` line for `pattern`.
+Configuration, measurement and troubleshooting:
+[USER_MAIL_AD.md](../operations/USER_MAIL_AD.md).
 The AD step needs `ldap-utils` and root (the notify cron runs as root).
 
 On an existing host, apply it in place:
