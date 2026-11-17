@@ -257,6 +257,12 @@ echo "x" > "$H/var/log/r_orphan_cleanup/notifications/luca.neri.log"
 out="$(fx --check-notified 2>/dev/null)"
 grep -q '^luca.neri [^ ]*@example.org ad$' <<<"$out" && pass "--check-notified also scans the legacy /var/log/r_orphan_cleanup dir" || fail "--check-notified legacy dir: $out"
 
+# --check from a worktree without config/site: the keys come from the deployed conf
+: > "$T/nosite.conf"
+out="$(env PATH="$T/bin:$PATH" FIX_USER_MAIL_ROOT="$H" FIX_USER_MAIL_BACKUP_ROOT="$T/bk" \
+       FIX_USER_MAIL_SITE_VARS="$T/nosite.conf" STUB_LOG="$STUB_LOG" bash "$FIX" --check mario.rossi7 2>/dev/null)"
+grep -q '^mario.rossi7 mario.rossi7@example.org ad$' <<<"$out" && pass "--check uses the AD keys of the deployed conf" || fail "--check deployed conf keys: $out"
+
 fx --rollback "$bk" >/dev/null 2>&1 && pass "hotfix --rollback exits 0" || fail "hotfix --rollback failed"
 check "rollback restores every file" "$orig_sum" "$(cat "$H/etc/biome-calc/conf/r_orphan_cleanup.conf" "$H/etc/biome-calc/script/"* | sha256sum)"
 
