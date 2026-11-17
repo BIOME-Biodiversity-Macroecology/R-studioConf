@@ -1,7 +1,7 @@
 <!-- docs/adr/0010-user-email-from-active-directory.md -->
 # ADR-0010: User notification e-mail from the Active Directory `mail` attribute
 
-Status: Proposed (PR; not applied on any host yet)
+Status: Accepted. Applied on biome-calc01-04 on 2026-11-17 (PR #65, #66, #67); runbook [USER_MAIL_AD.md](../operations/USER_MAIL_AD.md)
 Date: 2026-11-16
 
 ## Context

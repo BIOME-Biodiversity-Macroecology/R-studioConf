@@ -32,7 +32,10 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   of `main` it reported `pattern` on calc03 although the conf was correct).
 - `scripts/fix_user_mail_ad_inplace.sh`: in-place hotfix (dry-run, `--commit`,
   `--rollback`, `--check`/`--check-notified` to measure map/ad/pattern counts).
-- `tests/test_user_email_resolver.sh` (64 checks, in CI).
+- `tests/test_user_email_resolver.sh` (66 checks, in CI).
+- `docs/operations/USER_MAIL_AD.md`: runbook (configuration, metric, `ad:` reason
+  table, GSSAPI/PTR/SRV, rollback, fleet state); TROUBLESHOOTING §7.2,
+  DIAGNOSTICS_INDEX and SCRIPT_CATALOG entries. Applied on calc01-04 on 2026-11-17.
 
 ### Added (agent guardrails)
 

@@ -594,6 +594,22 @@ If files/cron are missing, redeploy `50_setup_nodes.sh` option 9.
 
 **Verification.** Dry-run is clear, genuine live worker trees remain, stale orphans are gone, and cron/logs under `/var/log/r_orphan_cleanup/` update.
 
+### 7.2 A user notice went to a guessed address
+
+**Symptom.** The user says they never got an orphan-cleanup or maintenance notice, or `notify.log` shows `source=pattern` / `WARN | Address not verified`.
+
+**Diagnosis.**
+
+```bash
+sudo grep "user=<user>" /var/log/biome-log/r_orphan_cleanup/notify.log | tail
+sudo bash scripts/fix_user_mail_ad_inplace.sh --check <user>      # prints the "ad: ..." reason
+sudo bash scripts/fix_user_mail_ad_inplace.sh --check-notified    # TOTAL n map= ad= pattern=
+```
+
+**Fix.** Follow the reason table in [USER_MAIL_AD.md §5](USER_MAIL_AD.md). The usual causes are a missing `ldap-utils`, AD keys missing from the conf after a redeploy, or GSSAPI "Server not found in Kerberos database" (DCs without PTR). An account with no AD entry needs a `user_email_map.txt` line.
+
+**Verification.** `--check <user>` prints `ad` (or `map`) and `sudo bash scripts/tools/simulate_user_notice.sh <user>` logs `source=ad` without sending mail.
+
 ## 8. R profile health and deployment drift
 
 ### 8.1 Welcome banner/guards/tools are missing

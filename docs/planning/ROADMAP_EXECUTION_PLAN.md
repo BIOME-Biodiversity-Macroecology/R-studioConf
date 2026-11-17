@@ -296,5 +296,5 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-2.1..2.3 T2 parity | Open |
 | WS-3 consolidation Steps 0–5 | Open |
 | WS-4 T3 | Deferred (gated) |
-| WS-1.7 user notices to the AD `mail` address (ADR-0010): resolver + hotfix + CI | Done in PR; `fix_user_mail_ad_inplace.sh` on calc04, then calc01-03: **Open: operator** (needs `ldap-utils`, site keys) |
+| WS-1.7 user notices to the AD `mail` address (ADR-0010): resolver + hotfix + CI | Done: PR #65, #66, #67; `fix_user_mail_ad_inplace.sh` applied and verified (`source=ad`) on calc01-04 on 2026-11-17; runbook `docs/operations/USER_MAIL_AD.md` |
 | WS-1.7 problem report (#58): show the admin the AD address of the portal login | Open (separate PR; `/api/` is unauthenticated, so no prefill) |
