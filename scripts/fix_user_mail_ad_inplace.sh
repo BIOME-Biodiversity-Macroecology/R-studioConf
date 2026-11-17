@@ -151,9 +151,29 @@ done
 # ── Check mode (measure; read-only) ─────────────────────────────────────────
 if [[ "$MODE" == "check" ]]; then
   if $CHECK_NOTIFIED; then
-    while IFS= read -r u; do CHECK_USERS+=("$u"); done < <(
-      find "$NOTIFY_LOG_DIR" -maxdepth 2 -name '*.log' 2>/dev/null \
-        | sed -E 's#.*/##; s/\.log$//; s/_[0-9]{8}$//' | grep -v '+$' | sort -u)
+    # Notification dirs: the one in the deployed conf (NOTIFY_DIR), plus the
+    # legacy /var/log/r_orphan_cleanup tree that 50_setup_nodes.sh also creates.
+    conf_notify=""
+    if [[ -f "$CONF" ]]; then
+      conf_notify="$(grep -E '^NOTIFY_DIR=' "$CONF" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+      conf_log="$(grep -E '^LOG_DIR=' "$CONF" | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+      conf_notify="${conf_notify//\$\{LOG_DIR\}/$conf_log}"
+    fi
+    dirs=()
+    for d in ${conf_notify:+"${R}${conf_notify}"} "$NOTIFY_LOG_DIR" "${R}/var/log/r_orphan_cleanup/notifications"; do
+      [[ -d "$d" ]] && dirs+=("$d")
+    done
+    log_info "Notification dirs scanned: ${dirs[*]:-none found}"
+    if ((${#dirs[@]})); then
+      while IFS= read -r u; do [[ -n "$u" ]] && CHECK_USERS+=("$u"); done < <(
+        find "${dirs[@]}" -maxdepth 2 -name '*.log' 2>/dev/null \
+          | sed -E 's#.*/##; s/\.log$//; s/_[0-9]{8}$//' | grep -v '+$' | sort -u || true)
+    fi
+    if ((${#CHECK_USERS[@]} == 0)); then
+      log_info "No pending or sent orphan notice on this host: nothing to measure"
+      printf 'TOTAL 0  map=0  ad=0  pattern=0\n'
+      exit 0
+    fi
   fi
   ((${#CHECK_USERS[@]})) || { log_error "--check needs at least one user (or use --check-notified)"; exit 2; }
   [[ -n "$AD_URI" && -n "$AD_BASE" ]] || log_warn "USER_MAIL_AD_URI/BASE_DN not set: every user resolves by map or pattern"
