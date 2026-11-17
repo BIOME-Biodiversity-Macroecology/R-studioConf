@@ -119,6 +119,14 @@ sudo bash scripts/fix_user_mail_ad_inplace.sh --check-notified   # after: expect
 sudo bash scripts/fix_user_mail_ad_inplace.sh --rollback /var/backups/biome-calc/user-mail-ad-hotfix-<ts>
 ```
 
+To see what a notice would look like and where it would go, without sending
+anything or touching `/etc`, run the real notify script with a fake
+`send_email.sh`:
+
+```bash
+sudo bash scripts/tools/simulate_user_notice.sh USER [USER...]   # prints notify.log (to=, source=) and the fake send calls
+```
+
 Administrative recipients can be supplied as a `file://` path, CSV, or one address. The deployed helper deduplicates addresses.
 
 ## Deployment

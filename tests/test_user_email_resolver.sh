@@ -225,6 +225,16 @@ else
 fi
 if fx --uri 'ldap://x" ; rm -rf /' --commit >/dev/null 2>&1; then fail "hotfix accepted a quoted value"; else pass "hotfix rejects quotes in values"; fi
 
+# ── scripts/tools/simulate_user_notice.sh (fake send, real resolver) ─────────
+SIM="${ROOT}/scripts/tools/simulate_user_notice.sh"
+printf 'SMTP_HOST="smtp.example.org"\nSMTP_PORT="25"\nSENDER_EMAIL="noreply@example.org"\nDNS_SERVERS="192.0.2.10"\nMAIL_DOMAIN="example.org"\nMAIL_DOMAINS_USER="example.org"\nADMIN_EMAIL="admin@example.org"\n' > "$T/deployed.conf"
+out="$(env PATH="$T/bin:$PATH" STUB_LOG="$STUB_LOG" CONF_SRC="$T/deployed.conf" AD_URI=ldap://ad.example.org AD_BASE=dc=example,dc=org \
+       bash "$SIM" mario.rossi7 2>/dev/null)"
+grep -q 'to=mario.rossi7@example.org | source=ad' <<<"$out" && pass "simulator logs the AD address and source" || fail "simulator: $out"
+grep -q '^FAKE send_email.sh .*-T mario.rossi7@example.org ' <<<"$out" && pass "simulator calls only the fake send" || fail "simulator send: $out"
+sim_dir="$(sed -n 's/.*kept in \([^ ]*\).*/\1/p' <<<"$out")"
+[[ -n "$sim_dir" && "$sim_dir" == /tmp/user-notice-sim.* ]] && rm -rf "$sim_dir"
+
 if (( FAILS > 0 )); then
   printf '%b%d test(s) failed%b\n' "$C_RED" "$FAILS" "$C_RESET"
   exit 1
