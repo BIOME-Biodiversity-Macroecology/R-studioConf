@@ -31,10 +31,15 @@ for bin in sed mktemp; do
 done
 [[ -f "$CONF_SRC" ]] || { printf '%b[FAIL]%b not found: %s\n' "$C_RED" "$C_RESET" "$CONF_SRC" >&2; exit 1; }
 site_value() { [[ -f "$SITE_VARS" ]] && grep -E "^${1}=" "$SITE_VARS" | tail -1 | cut -d= -f2- | tr -d '"' || true; }
+conf_value() { grep -E "^${1}=" "$CONF_SRC" | tail -1 | cut -d= -f2- | tr -d '"' || true; }
+# Precedence: environment, then the site overlay, then the deployed conf
+# (after fix_user_mail_ad_inplace.sh --commit the conf already holds them).
 AD_URI="${AD_URI:-$(site_value USER_MAIL_AD_URI)}"
+AD_URI="${AD_URI:-$(conf_value USER_MAIL_AD_URI)}"
 AD_BASE="${AD_BASE:-$(site_value USER_MAIL_AD_BASE_DN)}"
+AD_BASE="${AD_BASE:-$(conf_value USER_MAIL_AD_BASE_DN)}"
 [[ -n "$AD_URI" && -n "$AD_BASE" ]] \
-  || printf '%b[WARN]%b AD_URI/AD_BASE not set: only map and pattern will be used\n' "$C_YELLOW" "$C_RESET" >&2
+  || printf '%b[WARN]%b AD_URI/AD_BASE not set (env, site overlay or deployed conf): only map and pattern will be used\n' "$C_YELLOW" "$C_RESET" >&2
 [[ "$(id -u)" -eq 0 ]] \
   || printf '%b[WARN]%b not root: the host keytab is unreadable, the AD step will fall back\n' "$C_YELLOW" "$C_RESET" >&2
 

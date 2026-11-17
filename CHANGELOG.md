@@ -24,7 +24,9 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
 - `r_orphan_cleanup.conf`: `USER_MAIL_AD_URI`, `USER_MAIL_AD_BASE_DN`,
   `USER_MAIL_AD_TIMEOUT` (from the site overlay; empty = AD lookup off),
   rendered by `50_setup_nodes.sh`.
-- `scripts/tools/simulate_user_notice.sh`: real notify + resolver, fake send.
+- `scripts/tools/simulate_user_notice.sh`: real notify + resolver, fake send. Takes the AD
+  keys from the environment, the site overlay or the deployed conf (it used to
+  blank the conf's keys when the environment had none).
 - `scripts/fix_user_mail_ad_inplace.sh`: in-place hotfix (dry-run, `--commit`,
   `--rollback`, `--check`/`--check-notified` to measure map/ad/pattern counts).
 - `tests/test_user_email_resolver.sh` (64 checks, in CI).

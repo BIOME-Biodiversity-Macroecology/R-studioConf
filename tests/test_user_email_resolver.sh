@@ -276,6 +276,14 @@ out="$(env PATH="$T/bin:$PATH" STUB_LOG="$STUB_LOG" CONF_SRC="$T/deployed.conf" 
        bash "$SIM" mario.rossi7 2>/dev/null)"
 grep -q 'to=mario.rossi7@example.org | source=ad' <<<"$out" && pass "simulator logs the AD address and source" || fail "simulator: $out"
 grep -q '^FAKE send_email.sh .*-T mario.rossi7@example.org ' <<<"$out" && pass "simulator calls only the fake send" || fail "simulator send: $out"
+sim_dir0="$(sed -n 's/.*kept in \([^ ]*\).*/\1/p' <<<"$out")"
+[[ -n "$sim_dir0" && "$sim_dir0" == /tmp/user-notice-sim.* ]] && rm -rf "$sim_dir0"
+# AD keys only in the deployed conf (after --commit), none in the environment
+cp "$T/deployed.conf" "$T/deployed_ad.conf"
+printf 'USER_MAIL_AD_URI="ldap://ad.example.org"\nUSER_MAIL_AD_BASE_DN="dc=example,dc=org"\n' >> "$T/deployed_ad.conf"
+out="$(env -u AD_URI -u AD_BASE PATH="$T/bin:$PATH" STUB_LOG="$STUB_LOG" CONF_SRC="$T/deployed_ad.conf" \
+       bash "$SIM" mario.rossi7 2>/dev/null)"
+grep -q 'source=ad' <<<"$out" && pass "simulator keeps the AD keys of the deployed conf" || fail "simulator conf AD keys: $out"
 sim_dir="$(sed -n 's/.*kept in \([^ ]*\).*/\1/p' <<<"$out")"
 [[ -n "$sim_dir" && "$sim_dir" == /tmp/user-notice-sim.* ]] && rm -rf "$sim_dir"
 
