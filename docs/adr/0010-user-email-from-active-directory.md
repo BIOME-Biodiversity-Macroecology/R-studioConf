@@ -37,6 +37,14 @@ returns `mail: martina.livornese2@unibo.it`. Running `kinit` under sudo and
    the call. It runs only when `USER_MAIL_AD_URI` and `USER_MAIL_AD_BASE_DN` are
    set in `r_orphan_cleanup.conf` (from the site overlay). `kinit` and
    `ldapsearch` each have a timeout (`USER_MAIL_AD_TIMEOUT`, default 10 s).
+   The domain controllers come from the `_ldap._tcp.<domain>` SRV record of
+   the URI's host (priority order, at most `USER_MAIL_AD_MAX_DCS`, default 3)
+   and `ldapsearch -N` binds to each by its FQDN, so the Kerberos service
+   principal is `ldap/<DC fqdn>`. Reason: on calc01 (2026-11-17) the domain
+   name resolved to 6 DC IPs, two without a PTR record; SASL's reverse-DNS
+   canonicalisation then asked for an unknown principal ("Server not found in
+   Kerberos database"), so the plain `ldap://<domain>` URI worked only when
+   round-robin picked a DC with a correct PTR (it did on calc04).
 3. Every failure falls through to the pattern: AD keys empty, `ldap-utils`
    missing, not root, keytab unreadable, AD unreachable, timeout, no `mail`
    attribute, malformed value. A lookup never blocks or drops a notice.
@@ -55,8 +63,11 @@ returns `mail: martina.livornese2@unibo.it`. Running `kinit` under sudo and
   behaviour is exactly the old one. `ldap-utils` must be installed (base package
   list in `50_setup_nodes.sh`, added with ADR-0009; `apt install ldap-utils` on
   existing hosts).
-- Each notified user costs one `kinit` and one `ldapsearch` (at most
-  2 × timeout). The notify script resolves only users that get a mail.
+- Each notified user costs one `kinit`, one SRV query and one `ldapsearch`
+  per DC tried (worst case `(1 + USER_MAIL_AD_MAX_DCS) × timeout`).
+- `--check` / `--check-notified` and `simulate_user_notice.sh` print why AD
+  gave no address (`USER_MAIL_AD_DEBUG=1`: kinit error, per-DC ldapsearch
+  error, unknown account, no `mail`). The notify script resolves only users that get a mail.
 - The notify scripts run as root (cron), which is what reading
   `/etc/krb5.keytab` needs. Non-root callers silently get the pattern.
 - Not in scope: the portal problem report (#58). Its `/api/` endpoint is not

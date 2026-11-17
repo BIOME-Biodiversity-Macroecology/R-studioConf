@@ -100,7 +100,10 @@ Important source discrepancy: the generated configuration receives `KILL_TIMEOUT
    (`kinit -k HOSTNAME$`, `ldapsearch -Y GSSAPI`) in a private credential cache.
    Runs only when `USER_MAIL_AD_URI` and `USER_MAIL_AD_BASE_DN` are set in
    `r_orphan_cleanup.conf`; `kinit` and `ldapsearch` each stop after
-   `USER_MAIL_AD_TIMEOUT` seconds (default 10). Any failure falls through;
+   `USER_MAIL_AD_TIMEOUT` seconds (default 10). The DCs are taken from the
+   `_ldap._tcp` SRV record of the URI's host and queried by FQDN with
+   `ldapsearch -N` (no reverse DNS), at most `USER_MAIL_AD_MAX_DCS` (3).
+   Any failure falls through;
 3. `pattern`: every domain in `MAIL_DOMAINS_USER` as CSV, else
    `username@MAIL_DOMAIN`. Not verified: the relay drops wrong addresses silently.
 

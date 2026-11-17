@@ -42,13 +42,30 @@ EOF
 cat > "$T/bin/ldapsearch" <<'EOF'
 #!/usr/bin/env bash
 echo "ldapsearch $* ccache=${KRB5CCNAME:-unset}" >> "$STUB_LOG"
+h=""; prev=""; for a in "$@"; do [[ "$prev" == -H ]] && h="$a"; prev="$a"; done
+if [[ -n "${STUB_LDAP_DOWN_HOSTS:-}" && " ${STUB_LDAP_DOWN_HOSTS} " == *" ${h#ldap://} "* ]]; then
+  echo "SASL(-1): generic failure: GSSAPI Error: Unspecified GSS failure. (Server not found in Kerberos database)" >&2; exit 254
+fi
 case "${STUB_LDAP:-ok}" in
   down)  echo "ldap_sasl_interactive_bind_s: Can't contact LDAP server (-1)" >&2; exit 255 ;;
   hang)  sleep 30; exit 0 ;;
   none)  printf 'dn: CN=Uni1,OU=x,DC=example,DC=org\n\n'; exit 0 ;;
+  empty) exit 0 ;;
   bad)   printf 'dn: CN=Uni1,OU=x,DC=example,DC=org\nmail: not-an-address\n\n'; exit 0 ;;
   ok)    printf 'dn: CN=Uni01193179,OU=Str,DC=example,DC=org\nmail: %s\n\n' "${STUB_AD_MAIL:-mario.rossi7@example.org}"; exit 0 ;;
 esac
+EOF
+cat > "$T/bin/host" <<'EOF'
+#!/usr/bin/env bash
+# host -t SRV _ldap._tcp.<domain>: two DCs when STUB_SRV=1, else NXDOMAIN
+echo "host $*" >> "$STUB_LOG"
+if [[ "${STUB_SRV:-}" == 1 ]]; then
+  echo "${3} has SRV record 0 100 389 dc2.example.org."
+  echo "${3} has SRV record 0 100 389 dc3.example.org."
+  echo "${3} has SRV record 0 50 389 dc1.example.org."
+  exit 0
+fi
+echo "Host ${3} not found: 3(NXDOMAIN)"; exit 1
 EOF
 cat > "$T/bin/kdestroy" <<'EOF'
 #!/usr/bin/env bash
@@ -93,6 +110,27 @@ else
   fail "private ccache: $(cat "$STUB_LOG")"
 fi
 [[ ! -e "$(dirname "$cc")" ]] && pass "private ccache removed after the lookup" || fail "ccache dir left behind: $(dirname "$cc")"
+
+# 2b. USER_MAIL_AD_DEBUG=1 explains an empty AD result on stderr, stdout unchanged
+why() { run "USER_MAIL_AD_DEBUG=1 resolve_user_email_source mario.rossi7 example.org 2>&1 >/dev/null" "${AD[@]}" "$@"; }
+[[ "$(why STUB_LDAP=down)" == *"ldapsearch failed on every DC tried: ldap://ad.example.org rc 255: ldap_sasl_interactive_bind_s"* ]] && pass "debug: ldapsearch error reported" || fail "debug down: $(why STUB_LDAP=down)"
+[[ "$(why STUB_KINIT_FAIL=1)" == *"kinit -k BIOME-CALC04\$ failed"* ]] && pass "debug: kinit failure reported" || fail "debug kinit: $(why STUB_KINIT_FAIL=1)"
+[[ "$(why STUB_LDAP=hang)" == *"ldap://ad.example.org rc 124"* ]] && pass "debug: timeout reported" || fail "debug hang: $(why STUB_LDAP=hang)"
+[[ "$(why STUB_LDAP=none)" == *"account has no mail attribute"* ]] && pass "debug: missing mail reported" || fail "debug none: $(why STUB_LDAP=none)"
+[[ "$(why STUB_LDAP=empty)" == *"no AD account with sAMAccountName=mario.rossi7"* ]] && pass "debug: unknown account reported" || fail "debug empty: $(why STUB_LDAP=empty)"
+check "debug off: stderr silent" "" "$(run 'resolve_user_email_source mario.rossi7 example.org 2>&1 >/dev/null' "${AD[@]}" STUB_LDAP=down)"
+
+# 2c. DCs from the SRV record, tried in priority order with -N (no reverse DNS)
+out="$(run 'resolve_user_email_source mario.rossi7 example.org' "${AD[@]}" STUB_SRV=1 STUB_LDAP_DOWN_HOSTS="dc1.example.org")"
+check "SRV: first DC down, second answers" "mario.rossi7@example.org ad" "$out"
+check "SRV: DCs tried in priority order" "ldap://dc1.example.org ldap://dc2.example.org" "$(sed -n 's/^ldapsearch .*-H \([^ ]*\) .*/\1/p' "$STUB_LOG" | tr '\n' ' ' | sed 's/ $//')"
+grep -q '^ldapsearch -N ' "$STUB_LOG" && pass "ldapsearch runs with -N (no SASL host canonicalisation)" || fail "no -N: $(cat "$STUB_LOG")"
+out="$(run 'resolve_user_email_source mario.rossi7 example.org' "${AD[@]}" STUB_SRV=1 STUB_LDAP_DOWN_HOSTS="dc1.example.org dc2.example.org dc3.example.org" USER_MAIL_AD_MAX_DCS=2)"
+check "SRV: every DC down -> pattern" "mario.rossi7@example.org pattern" "$out"
+check "SRV: at most USER_MAIL_AD_MAX_DCS DCs tried" "2" "$(grep -c '^ldapsearch ' "$STUB_LOG")"
+w="$(why STUB_SRV=1 STUB_LDAP_DOWN_HOSTS="dc1.example.org dc2.example.org dc3.example.org")"
+[[ "$w" == *"ldap://dc1.example.org rc 254"*"Server not found in Kerberos database"*"ldap://dc3.example.org rc 254"* ]] \
+  && pass "debug: per-DC GSSAPI errors reported" || fail "debug SRV: $w"
 
 # 3. resolve_user_email keeps the legacy interface (address only)
 out="$(run 'resolve_user_email mario.rossi7 example.org' "${AD[@]}")"

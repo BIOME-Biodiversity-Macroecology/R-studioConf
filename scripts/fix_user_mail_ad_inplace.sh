@@ -181,6 +181,8 @@ if [[ "$MODE" == "check" ]]; then
   command -v ldapsearch >/dev/null 2>&1 || log_warn "ldapsearch not installed (apt install ldap-utils): AD step will be skipped"
   [[ "$(id -u)" -eq 0 ]] || log_warn "Not root: the host keytab is unreadable, AD step will be skipped"
   declare -A count=()
+  why_f="$(mktemp)"
+  trap 'rm -f "${why_f:-}"' EXIT
   for u in "${CHECK_USERS[@]}"; do
     line="$(
       set +u
@@ -188,11 +190,14 @@ if [[ "$MODE" == "check" ]]; then
       if [[ -f "$CONF" ]]; then source "$CONF"; fi
       # shellcheck source=/dev/null
       source "$SRC_HELPERS"
-      USER_MAIL_AD_URI="$AD_URI" USER_MAIL_AD_BASE_DN="$AD_BASE" USER_MAIL_AD_TIMEOUT="$AD_TIMEOUT" \
+      USER_MAIL_AD_URI="$AD_URI" USER_MAIL_AD_BASE_DN="$AD_BASE" USER_MAIL_AD_TIMEOUT="$AD_TIMEOUT" USER_MAIL_AD_DEBUG=1 \
         USER_EMAIL_MAP_FILE="${R}/etc/biome-calc/conf/user_email_map.txt" \
         resolve_user_email_source "$u" "${MAIL_DOMAIN:-}"
-    )"
+    )" 2>"$why_f"
     printf '%s %s\n' "$u" "$line"
+    if [[ "${line##* }" != "ad" ]] && grep -q '^ad: ' "$why_f"; then
+      sed 's/^/    /' "$why_f"
+    fi
     src="${line##* }"; count[$src]=$(( ${count[$src]:-0} + 1 ))
   done
   printf 'TOTAL %d  map=%d  ad=%d  pattern=%d\n' "${#CHECK_USERS[@]}" "${count[map]:-0}" "${count[ad]:-0}" "${count[pattern]:-0}"

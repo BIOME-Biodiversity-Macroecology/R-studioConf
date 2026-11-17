@@ -86,40 +86,119 @@ _biome_valid_address() {
     [[ "${1:-}" =~ ^[^[:space:]@,\<\>\"\;]+@[^[:space:]@,\<\>\"\;]+\.[^[:space:]@,\<\>\"\;]+$ ]]
 }
 
-# ad_lookup_user_mail USER -> AD mail attribute on stdout, or nothing
+# ad_lookup_user_mail USER -> AD mail attribute on stdout, or nothing.
+# With USER_MAIL_AD_DEBUG=1 the reason for an empty result goes to stderr
+# ("ad: <reason>"), e.g. a GSSAPI/Kerberos error; stdout is unchanged.
+_ad_why() {
+    [ "${USER_MAIL_AD_DEBUG:-0}" = "1" ] && printf 'ad: %s\n' "$*" >&2
+    return 0
+}
+
+# _ad_ldap_uris -> one LDAP URI per line to try, in order.
+# Each word of USER_MAIL_AD_URI is a URI. When its host is a DNS domain with
+# _ldap._tcp SRV records, the domain controllers listed there are used
+# instead (by priority): GSSAPI then asks for ldap/<DC fqdn>, a registered
+# SPN, so the bind no longer depends on reverse DNS of round-robin DC IPs
+# (calc01 2026-11-17: two DC IPs without PTR -> "Server not found in
+# Kerberos database"). At most USER_MAIL_AD_MAX_DCS (default 3) URIs.
+_ad_ldap_uris() {
+    local uris="$1" max="$2" u scheme host srv n=0
+    for u in $uris; do
+        scheme="${u%%://*}"; host="${u#*://}"; host="${host%%/*}"; host="${host%%:*}"
+        [[ "$scheme" == "ldap" || "$scheme" == "ldaps" ]] || continue
+        [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || continue
+        srv=""
+        if command -v host >/dev/null 2>&1; then
+            srv="$(timeout 5 host -t SRV "_ldap._tcp.${host}" 2>/dev/null \
+                   | awk '/has SRV record/ {print $(NF-3), $NF}')"
+        elif command -v dig >/dev/null 2>&1; then
+            srv="$(timeout 5 dig +short SRV "_ldap._tcp.${host}" 2>/dev/null | awk 'NF==4 {print $1, $4}')"
+        fi
+        if [ -n "$srv" ]; then
+            while read -r _ target; do
+                target="${target%.}"
+                [[ "$target" =~ ^[A-Za-z0-9.-]+$ ]] || continue
+                echo "${scheme}://${target}"
+                n=$((n + 1)); [ "$n" -ge "$max" ] && return 0
+            done < <(printf '%s\n' "$srv" | sort -n -k1,1)
+        else
+            echo "${scheme}://${host}"
+            n=$((n + 1)); [ "$n" -ge "$max" ] && return 0
+        fi
+    done
+    return 0
+}
+
 ad_lookup_user_mail() {
     local username="${1:-}"
-    local uri base timeout_s principal ccdir out addr
+    local uri base timeout_s max_dcs principal ccdir out addr stage dc_list
     uri="$(_biome_conf_value "${USER_MAIL_AD_URI:-}")"
     base="$(_biome_conf_value "${USER_MAIL_AD_BASE_DN:-}")"
     timeout_s="$(_biome_conf_value "${USER_MAIL_AD_TIMEOUT:-}")"
     [[ "$timeout_s" =~ ^[0-9]+$ ]] && [ "$timeout_s" -gt 0 ] || timeout_s=10
+    max_dcs="$(_biome_conf_value "${USER_MAIL_AD_MAX_DCS:-}")"
+    [[ "$max_dcs" =~ ^[0-9]+$ ]] && [ "$max_dcs" -gt 0 ] || max_dcs=3
 
-    [ -n "$uri" ] && [ -n "$base" ] || return 0
+    [ -n "$uri" ] && [ -n "$base" ] || { _ad_why "lookup off (USER_MAIL_AD_URI/BASE_DN empty)"; return 0; }
     # Strict charset: no LDAP filter injection, no option injection
-    [[ "$username" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || return 0
-    command -v kinit >/dev/null 2>&1 || return 0
-    command -v ldapsearch >/dev/null 2>&1 || return 0
-    command -v timeout >/dev/null 2>&1 || return 0
+    [[ "$username" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { _ad_why "username rejected (unsafe characters)"; return 0; }
+    local bin
+    for bin in kinit ldapsearch timeout; do
+        command -v "$bin" >/dev/null 2>&1 || { _ad_why "$bin not installed"; return 0; }
+    done
+    dc_list="$(_ad_ldap_uris "$uri" "$max_dcs")"
+    [ -n "$dc_list" ] || { _ad_why "no usable ldap:// or ldaps:// URI in USER_MAIL_AD_URI"; return 0; }
 
     principal="$(_biome_conf_value "${USER_MAIL_AD_PRINCIPAL:-}")"
     [ -n "$principal" ] || principal="$(hostname -s 2>/dev/null | tr '[:lower:]' '[:upper:]')\$"
 
     # Private credential cache: never touches root's default ccache,
-    # removed right after the lookup.
-    ccdir="$(mktemp -d 2>/dev/null)" || return 0
+    # removed right after the lookup. The subshell records how far it got
+    # in ${ccdir}/stage (exit codes are 8-bit, so not used for this).
+    ccdir="$(mktemp -d 2>/dev/null)" || { _ad_why "mktemp failed"; return 0; }
     out="$(
         export KRB5CCNAME="FILE:${ccdir}/cc"
-        timeout "$timeout_s" kinit -k "$principal" >/dev/null 2>&1 \
-            && timeout "$timeout_s" ldapsearch -LLL -o ldif-wrap=no -Y GSSAPI -Q \
-                   -H "$uri" -b "$base" "(sAMAccountName=${username})" mail 2>/dev/null
+        r=0
+        if timeout "$timeout_s" kinit -k "$principal" >/dev/null 2>"${ccdir}/kinit.err"; then
+            echo "ldap" > "${ccdir}/stage"
+            while read -r dc; do
+                r=0
+                # -N: no reverse-DNS canonicalisation; the SPN is ldap/<host as written>
+                timeout "$timeout_s" ldapsearch -N -LLL -o ldif-wrap=no -Y GSSAPI -Q \
+                    -H "$dc" -b "$base" "(sAMAccountName=${username})" mail 2>"${ccdir}/ldap.err" || r=$?
+                if [ "$r" -eq 0 ]; then echo "ok" > "${ccdir}/stage"; break; fi
+                printf '%s rc %s: %s; ' "$dc" "$r" "$(tr '\n\t' '  ' < "${ccdir}/ldap.err" | cut -c1-200)" >> "${ccdir}/ldap.all"
+            done <<< "$dc_list"
+        else
+            r=$?
+            echo "kinit $r" > "${ccdir}/stage"
+        fi
         command -v kdestroy >/dev/null 2>&1 && kdestroy >/dev/null 2>&1
         true
     )" || true
+    stage="$(cat "${ccdir}/stage" 2>/dev/null || echo "unknown")"
+    case "$stage" in
+        ok) ;;
+        "kinit 124") _ad_why "kinit timed out after ${timeout_s}s" ;;
+        kinit*) _ad_why "kinit -k ${principal} failed (rc ${stage#kinit }): $(tr '\n\t' '  ' < "${ccdir}/kinit.err" 2>/dev/null | cut -c1-300)" ;;
+        ldap) _ad_why "ldapsearch failed on every DC tried: $(cat "${ccdir}/ldap.all" 2>/dev/null)" ;;
+        *) _ad_why "lookup did not complete" ;;
+    esac
     rm -rf "$ccdir"
+    [ "$stage" = "ok" ] || return 0
 
+    if ! printf '%s\n' "$out" | grep -qi '^dn:'; then
+        _ad_why "no AD account with sAMAccountName=${username}"
+        return 0
+    fi
     addr="$(printf '%s\n' "$out" | awk 'tolower($1)=="mail:" { print $2; exit }')"
-    _biome_valid_address "$addr" && printf '%s\n' "$addr"
+    if [ -z "$addr" ]; then
+        _ad_why "account has no mail attribute"
+    elif _biome_valid_address "$addr"; then
+        printf '%s\n' "$addr"
+    else
+        _ad_why "mail attribute is not a plain address: ${addr}"
+    fi
     return 0
 }
 
