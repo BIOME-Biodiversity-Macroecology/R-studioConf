@@ -19,8 +19,9 @@ set -euo pipefail
 #   * COPY templates/notify_r_orphans.sh.template
 #          -> /etc/biome-calc/script/notify_r_orphans.sh
 #
-# Values come from config/site/setup_nodes.site.vars.conf (USER_MAIL_AD_URI,
-# USER_MAIL_AD_BASE_DN, optional USER_MAIL_AD_TIMEOUT) or from --uri/--base-dn.
+# Values come from --uri/--base-dn, else config/site/setup_nodes.site.vars.conf
+# (USER_MAIL_AD_URI, USER_MAIL_AD_BASE_DN, optional USER_MAIL_AD_TIMEOUT), else
+# the keys already in the deployed r_orphan_cleanup.conf (after a --commit).
 #
 # Safety:
 #   * dry-run by default; --commit applies; --rollback DIR restores.
@@ -112,6 +113,10 @@ site_value() {  # KEY -> value from the site overlay (not sourced: grep|cut)
   [[ -f "$SITE_VARS" ]] || return 0
   grep -E "^${1}=" "$SITE_VARS" | tail -1 | cut -d= -f2- | tr -d '"' || true
 }
+conf_value() {  # KEY -> value already in the deployed conf (after a --commit)
+  [[ -f "$CONF" ]] || return 0
+  grep -E "^${1}=" "$CONF" | tail -1 | cut -d= -f2- | tr -d '"' || true
+}
 
 # ── Rollback ────────────────────────────────────────────────────────────────
 do_rollback() {  # DIR
@@ -137,9 +142,14 @@ if [[ "$MODE" == "rollback" ]]; then
 fi
 
 # ── Settings ────────────────────────────────────────────────────────────────
+# Precedence: --uri/--base-dn/--timeout, then the site overlay, then the
+# deployed conf (so --check works from a worktree without config/site).
 AD_URI="${OPT_URI:-$(site_value USER_MAIL_AD_URI)}"
+AD_URI="${AD_URI:-$(conf_value USER_MAIL_AD_URI)}"
 AD_BASE="${OPT_BASE:-$(site_value USER_MAIL_AD_BASE_DN)}"
+AD_BASE="${AD_BASE:-$(conf_value USER_MAIL_AD_BASE_DN)}"
 AD_TIMEOUT="${OPT_TIMEOUT:-$(site_value USER_MAIL_AD_TIMEOUT)}"
+AD_TIMEOUT="${AD_TIMEOUT:-$(conf_value USER_MAIL_AD_TIMEOUT)}"
 AD_TIMEOUT="${AD_TIMEOUT:-10}"
 [[ "$AD_TIMEOUT" =~ ^[0-9]+$ && "$AD_TIMEOUT" -gt 0 ]] || { log_error "--timeout must be a positive integer"; exit 2; }
 for v in "$AD_URI" "$AD_BASE"; do

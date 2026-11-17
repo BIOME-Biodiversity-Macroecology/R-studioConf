@@ -27,6 +27,9 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
 - `scripts/tools/simulate_user_notice.sh`: real notify + resolver, fake send. Takes the AD
   keys from the environment, the site overlay or the deployed conf (it used to
   blank the conf's keys when the environment had none).
+- `fix_user_mail_ad_inplace.sh --check` falls back to the AD keys of the deployed
+  conf when neither the options nor the site overlay set them (run from a worktree
+  of `main` it reported `pattern` on calc03 although the conf was correct).
 - `scripts/fix_user_mail_ad_inplace.sh`: in-place hotfix (dry-run, `--commit`,
   `--rollback`, `--check`/`--check-notified` to measure map/ad/pattern counts).
 - `tests/test_user_email_resolver.sh` (64 checks, in CI).
