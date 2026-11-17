@@ -161,7 +161,8 @@ if [[ "$MODE" == "check" ]]; then
     fi
     dirs=()
     for d in ${conf_notify:+"${R}${conf_notify}"} "$NOTIFY_LOG_DIR" "${R}/var/log/r_orphan_cleanup/notifications"; do
-      [[ -d "$d" ]] && dirs+=("$d")
+      [[ -d "$d" ]] || continue
+      [[ " ${dirs[*]:-} " == *" $d "* ]] || dirs+=("$d")
     done
     log_info "Notification dirs scanned: ${dirs[*]:-none found}"
     if ((${#dirs[@]})); then
