@@ -243,8 +243,9 @@ setup_nodes_dependencies() {
     libnlopt-dev \
     libgoogle-perftools-dev sendemail dnsutils \
     samba-common-bin winbind rsync tree \
-    python3-dbus python3-gi python3-apt
+    python3-dbus python3-gi python3-apt ldap-utils
   # python3-dbus/gi/apt: bspm's D-Bus service (Step 7, ADR-0005)
+  # ldap-utils: AD mail lookup of the shared resolver (ADR-0010), used by orphan and maintenance emails (ADR-0009)
   log_success "Base dependencies installed"
   # NOTE: R CMD javareconf + rJava source install handled by r_env_manager.sh configure_java_for_r()
 }

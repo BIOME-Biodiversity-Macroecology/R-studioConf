@@ -8,6 +8,40 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (T1 node maintenance: kernel reboot on a free node, drain emails, ADR-0009)
+
+- `scripts/biome_node_maintenance.sh`: opt-in reboot. With `MAINT_REBOOT=true`, a
+  needed reboot (needrestart kernel status 2/3 or `/var/run/reboot-required`)
+  happens inside the night window. Conditions: the node is free, today is one of
+  this host's `MAINT_REBOOT_DAYS`, and the node is still free after a 60 s
+  re-check. It never reboots twice for the same expected kernel, so a wrong
+  GRUB default cannot cause a boot loop. Before: calc02 had been up since
+  2026-08-24, with every kernel update since then installed but not running.
+- New `biome-node-postboot.service`: after a reboot done by the job, it checks
+  rstudio-server, sssd, the fstab NFS mounts and the expected kernel. The result
+  goes to `postboot_report.json`; a failure is logged at priority err and mailed
+  to the admin.
+- Drain escalation, never a kill, once per night each:
+  - admin email after `MAINT_NOTIFY_ADMIN_NIGHTS`, listing user, process, age
+    and average CPU share;
+  - email to each blocking user after `MAINT_NOTIFY_USERS_NIGHTS` with a reboot
+    pending (save, quit, use another node).
+  The addresses come from the shared resolver in `orphan_cleanup_helpers.sh`:
+  map, then AD `mail` once ADR-0010 is deployed, then the `MAIL_DOMAINS_USER`
+  pattern. The source is logged. The mail setup is the one the R orphan
+  notifier already deploys.
+- `--plan` lists who blocks the node and the address each user would get.
+  `--status` shows the reboot state and the last post-boot check.
+  `last_report.json` is now schema 2, with `reboot` and `reboot_pending_since`.
+- `scripts/50_setup_nodes.sh`: `ldap-utils` added to the base packages (AD lookup, ADR-0010).
+- Impact: none until enabled. All new settings default to off, and the timer
+  runs the script from the checkout, so a `git pull` changes no behaviour. Run
+  `--install-timer` again to add the post-boot unit.
+- Rollback: set `MAINT_REBOOT=false` and `MAINT_NOTIFY_*=0` in the site file, or
+  run `--remove-timer`.
+- Tests: `tests/test_biome_node_maintenance.sh` grows from 32 to 70 cases
+  (reboot gates, boot-loop guard, emails, address sources, post-boot).
+
 ### Added (user e-mail from Active Directory, ADR-0010)
 
 - `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`
@@ -36,6 +70,7 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
 - `docs/operations/USER_MAIL_AD.md`: runbook (configuration, metric, `ad:` reason
   table, GSSAPI/PTR/SRV, rollback, fleet state); TROUBLESHOOTING §7.2,
   DIAGNOSTICS_INDEX and SCRIPT_CATALOG entries. Applied on calc01-04 on 2026-11-17.
+
 
 ### Added (agent guardrails)
 
