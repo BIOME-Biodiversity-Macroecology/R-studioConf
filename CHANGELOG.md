@@ -29,7 +29,7 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   `--drop-key`); verifies the effective configuration is identical, all or
   nothing, reports `scripts/` edits with their diff. Runbook
   `docs/operations/CONFIG_SITE_OVERLAY.md`.
-- `tests/test_config_site_overlay.sh` (77 checks, in CI).
+- `tests/test_config_site_overlay.sh` (79 checks, in CI).
 
 ### Added (user e-mail from Active Directory, ADR-0010)
 
