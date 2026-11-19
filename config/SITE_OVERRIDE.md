@@ -37,6 +37,25 @@ The site file may also set the optional AD e-mail lookup keys `USER_MAIL_AD_URI`
 `USER_MAIL_AD_BASE_DN` and `USER_MAIL_AD_TIMEOUT` (ADR-0010). They are rendered
 into `/etc/biome-calc/conf/r_orphan_cleanup.conf` only; empty means AD lookup off.
 
+## Host values for any `<name>.vars.conf` (ADR-0011)
+
+Every committed `config/<name>.vars.conf` can have a gitignored companion
+`config/site/<name>.site.vars.conf`, sourced right after it, so its assignments
+win. One implementation, `lib/site_overlay.sh` (`site_overlay_source`,
+`site_overlay_get`, `site_overlay_render`), is used by every T1 reader of
+`configure_rstudio`, `install_nginx`, `install_secure_access` and
+`setup_nodes`. The deployed `/etc/biome-calc/conf/setup_nodes.vars.conf` is
+the committed file followed by its overlay.
+
+**Never edit a tracked `config/*.vars.conf` on a host**: a host value there
+blocks `git pull --ff-only` as soon as upstream changes the file. To move
+existing host edits: `scripts/fix_config_site_overlay_inplace.sh`, runbook
+[`docs/operations/CONFIG_SITE_OVERLAY.md`](../docs/operations/CONFIG_SITE_OVERLAY.md).
+
+Exceptions (rule 19, single source of truth): `RPROFILE_VERSION`,
+`DEFAULT_R_VERSION` and `R_CORE_PACKAGES` are ignored in any overlay (with a
+warning), and `pin_r_version.vars.conf` never takes one.
+
 ## First-time setup on a host
 
 ```bash
@@ -58,5 +77,6 @@ them. Full runbook: `plan/secret_scrub_site_overlay_plan.md` §4.
 
 ## Backups
 
-`config/site/` is now the only copy of these values in this checkout. Include it
+`config/site/` is now the only copy of these values in this checkout (also of
+the values moved there by `fix_config_site_overlay_inplace.sh`). Include it
 in `/var/backups/r_env_manager/`, or mirror to a **private** repo.

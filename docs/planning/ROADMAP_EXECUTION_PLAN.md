@@ -120,6 +120,12 @@ Each stream has three phases: **Audit** (current state, pre-requisites),
    v12.11-fix3). Release `v2026.10.1`: Step 8 writes `/etc/biome-calc/deployed_release`
    and refuses an older or diverged checkout unless `--allow-downgrade` (rollback).
    Next: a read-only drift check that compares the stamps across hosts.
+5. WS-0.5: Clean host checkouts (ADR-0011). Host values move from tracked
+   `config/*.vars.conf` to `config/site/<name>.site.vars.conf`, read by every T1
+   reader through `lib/site_overlay.sh`; `fix_config_site_overlay_inplace.sh`
+   migrates each host in place (calc04 first). Metric per host:
+   `git diff --name-only HEAD -- config/ | wc -l` (target 0) and
+   `git pull --ff-only` succeeding. Edits to `scripts/` are reviewed one by one.
 
 **Validate**
 - `make generate-check` and `.ai/validate.sh --ci` are green on `main`.
@@ -277,6 +283,8 @@ contradiction to fix when the stream opens: `kubernetes-deploy/configmaps.yaml` 
 | WS-0.4 versioned releases + hotfix register (ADR-0006) | Done (PR #41); release workflow tags `v2026.10.0` on merge of its PR |
 | WS-0.4 Step 8 writes the deployed tag; refuse older template | Done (PR #43, release `v2026.10.1`, deployed on calc01-04 2026-10-20); `--allow-downgrade` for rollback |
 | WS-0.4 drift check reading the stamps of all hosts | Open |
+| WS-0.5 site overlay for every `*.vars.conf` + in-place migration (ADR-0011) | In PR (draft); apply on calc04, then calc03, 02, 01: **Open: operator** |
+| WS-0.5 review of local `scripts/tools/*.sh` edits on calc01-04 | Open (after the migration dry-run lists them per host) |
 | WS-0.1 stale open_gaps | Open |
 | WS-0.2 Dependabot freshness | Open (default B until M3) |
 | WS-0.3 CI R version = T1 pin | Done in this PR (CI reads `DEFAULT_R_VERSION`, asserts R 4.6.0; all 6 R runtime suites pass on 4.6.0, no fixture changes needed) |

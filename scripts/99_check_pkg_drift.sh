@@ -40,8 +40,11 @@ fi
 # ── defaults (overridable via config/setup_nodes.vars.conf) ──
 VARS_CONF="${WORKSPACE_ROOT}/config/setup_nodes.vars.conf"
 if [[ -f "${VARS_CONF}" ]]; then
-  # shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
-  source "${VARS_CONF}"
+  # common_utils.sh is optional here: load the overlay lib on its own.
+  # shellcheck source=../lib/site_overlay.sh disable=SC1091
+  source "${WORKSPACE_ROOT}/lib/site_overlay.sh"
+  # Committed file, then config/site/setup_nodes.site.vars.conf (ADR-0011)
+  site_overlay_source "${VARS_CONF}"
 fi
 
 DRIFT_R="${WORKSPACE_ROOT}/scripts/tools/r_pkg_drift_detector.R"

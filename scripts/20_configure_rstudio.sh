@@ -35,8 +35,8 @@ source "$UTILS_SCRIPT_PATH"
 # Source configuration variables if file exists
 if [[ -f "$CONF_VARS_FILE" ]]; then
     log "Sourcing RStudio configuration variables from $CONF_VARS_FILE"
-    # shellcheck source=../config/configure_rstudio.vars.conf disable=SC1091
-    source "$CONF_VARS_FILE"
+    # Committed file, then config/site/configure_rstudio.site.vars.conf (ADR-0011)
+    site_overlay_source "$CONF_VARS_FILE"
 else
     log "Warning: RStudio configuration file $CONF_VARS_FILE not found. Using internal defaults."
     # Define crucial defaults here if the conf file is optional or might be missing

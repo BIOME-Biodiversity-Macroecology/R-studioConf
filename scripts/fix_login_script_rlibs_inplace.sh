@@ -159,7 +159,10 @@ fi
 proj_root="$(grep -m1 -E '^USER_PROJECTS_BASE_DIR=' "$TARGET" | cut -d= -f2- | tr -d '"' || true)"
 nfs_home=""
 if [[ -r "$VARS_CONF" ]]; then
-    nfs_home="$(grep -E '^[[:space:]]*NFS_HOME=' "$VARS_CONF" | tail -n1 | cut -d= -f2- | tr -d '"' | sed 's/[[:space:]]*#.*$//' || true)"
+    # Effective value, site overlay included (ADR-0011)
+    # shellcheck source=../lib/site_overlay.sh disable=SC1091
+    source "${REPO_DIR}/lib/site_overlay.sh"
+    nfs_home="$(site_overlay_get "$VARS_CONF" NFS_HOME 2>/dev/null || true)"
 fi
 log_info "USER_PROJECTS_BASE_DIR=${proj_root:-<unset>}  NFS_HOME=${nfs_home:-<unknown: ${VARS_CONF} unreadable>}"
 if [[ -z "$proj_root" || -z "$nfs_home" || "${proj_root%/}" != "${nfs_home%/}" ]]; then

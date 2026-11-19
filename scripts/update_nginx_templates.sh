@@ -26,8 +26,8 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     log ERROR "Config file not found: $CONFIG_FILE"
     exit 1
 fi
-# shellcheck source=../config/install_nginx.vars.conf disable=SC1091
-source "$CONFIG_FILE"
+# Committed file, then config/site/install_nginx.site.vars.conf (ADR-0011)
+site_overlay_source "$CONFIG_FILE"
 
 log INFO "--- Updating Nginx Configuration from Templates ---"
 
@@ -59,7 +59,8 @@ log INFO "Processing templates..."
 rstudio_vars_file="${SCRIPT_DIR}/../config/configure_rstudio.vars.conf"
 rsession_timeout_minutes=10080 # Default 7 days
 if [[ -f "$rstudio_vars_file" ]]; then
-  extracted_timeout=$(grep -E '^[[:space:]]*RSESSION_TIMEOUT_MINUTES=' "$rstudio_vars_file" | cut -d= -f2- | tr -d '"'\''[:space:]')
+  # Effective value, site overlay included (ADR-0011)
+  extracted_timeout="$(site_overlay_get "$rstudio_vars_file" RSESSION_TIMEOUT_MINUTES | tr -d '[:space:]')"
   if [[ -n "$extracted_timeout" && "$extracted_timeout" =~ ^[0-9]+$ ]]; then
     rsession_timeout_minutes="$extracted_timeout"
   fi

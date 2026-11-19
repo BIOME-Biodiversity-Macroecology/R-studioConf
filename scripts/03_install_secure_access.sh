@@ -109,8 +109,8 @@ main() {
     if [ ! -f "$DEFAULT_CONFIG_FILE" ]; then 
         log "WARN" "Configuration file not found at '$DEFAULT_CONFIG_FILE'. Using defaults."
     else
-        # shellcheck source=../config/install_secure_access.vars.conf disable=SC1091
-        source "$DEFAULT_CONFIG_FILE"
+        # Committed file, then config/site/install_secure_access.site.vars.conf (ADR-0011)
+        site_overlay_source "$DEFAULT_CONFIG_FILE"
     fi
 
     if [ $# -eq 0 ]; then usage; fi

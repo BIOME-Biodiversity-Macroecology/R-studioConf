@@ -98,8 +98,8 @@ obtain_certificate() {
   
   # Source config
   if [[ -f "$CONFIG_FILE" ]]; then
-    # shellcheck source=../config/install_nginx.vars.conf disable=SC1091
-    source "$CONFIG_FILE"
+    # Committed file, then config/site/install_nginx.site.vars.conf (ADR-0011)
+    site_overlay_source "$CONFIG_FILE"
   fi
   
   # Get or prompt for domain
