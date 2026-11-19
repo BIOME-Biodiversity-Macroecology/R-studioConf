@@ -70,7 +70,10 @@ CONF_FILE="${SCRIPT_DIR}/../config/setup_nodes.vars.conf"
 
 # Read NFS_HOME from project conf if available (single source of truth)
 if [[ -r "$CONF_FILE" ]]; then
-    NFS_HOME_FROM_CONF="$(awk -F'=' '/^[[:space:]]*NFS_HOME[[:space:]]*=/ {gsub(/"/,"",$2); gsub(/[[:space:]]/,"",$2); print $2; exit}' "$CONF_FILE" || true)"
+    # Effective value, site overlay included (ADR-0011)
+    # shellcheck source=../lib/site_overlay.sh disable=SC1091
+    source "${SCRIPT_DIR}/../lib/site_overlay.sh"
+    NFS_HOME_FROM_CONF="$(site_overlay_get "$CONF_FILE" NFS_HOME 2>/dev/null | tr -d '[:space:]' || true)"
     [[ -n "${NFS_HOME_FROM_CONF:-}" ]] && NFS_HOME="$NFS_HOME_FROM_CONF"
 fi
 NFS_HOME="${NFS_HOME:-$NFS_HOME_DEFAULT}"

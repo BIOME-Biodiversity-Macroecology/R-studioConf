@@ -71,8 +71,8 @@ if [[ ! -f "${VARS_CONF}" ]]; then
   log_error "Missing config: ${VARS_CONF}"
   exit 1
 fi
-# shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
-source "${VARS_CONF}"
+# Committed file, then config/site/setup_nodes.site.vars.conf (ADR-0011)
+site_overlay_source "${VARS_CONF}"
 
 AUDIT_TEMPLATE="${WORKSPACE_ROOT}/templates/00_audit_v28.R.template"
 AUDIT_DEST="${BIOME_CONF}/audit/00_audit_v28.R"
