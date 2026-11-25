@@ -8,6 +8,54 @@ and `templates/Rprofile_site.d/` for feature fragments.
 
 ---
 
+## v12.11-fix4 (2026-11-25) — "banner RAM values: the session's own cgroup, measured total"
+
+### Trigger
+
+Jfs, calc01 banner: `325 GB available (VM 400GB | slice limit: none)` and
+`status()` `src: not detected — check systemd slice config`.
+
+### Cause
+
+- `VM 400GB` was the deploy-time constant `VM_RAM_GB` (repo default 450,
+  calc01's local config 400), never measured.
+- The cgroup reader looked for limits in `user.slice/user-<uid>.slice` by UID.
+  An RStudio rsession is a child of `rstudio-server.service` and runs in
+  `/system.slice/rstudio-server.service`, so it never found the user-slice
+  limits and printed "not detected", advising a logout that changes nothing.
+- `available` was in fact `0.9 × MemAvailable`.
+
+### Fix
+
+- Fragment 20: `.biome_cgroup_read_limits()` reads `/proc/self/cgroup`
+  (`0::<path>`) and walks up to the root, keeping the tightest `memory.max`,
+  `memory.high` and `cpu.max`. New `source` values `cgroupv2-self` and
+  `cgroupv2-unlimited`; the session cgroup path is kept in
+  `shared_env$cgroup_path`. Missing controller files are skipped without a
+  warning. The UID-based v2/v1 lookup stays as the fallback for hosts without a
+  `0::` line (cgroup v1).
+- Fragment 20: `.biome_total_ram_gb()` reads `MemTotal`; `VM_RAM_GB` is only
+  the fallback.
+- Fragment 70: banner `RAM: <n> GB usable now (VM total <MemTotal> GB | memory
+  limit: <limit|none> [<cgroup path>])`; `status()` splits into `RAM Usable`
+  and `Mem Limit` lines; `biome_cgroup_verify()` prints the session cgroup and
+  says plainly when the session is outside the user slice.
+- Messages in English. No limit is changed: display and diagnosis only.
+  Enforcing a limit on RStudio sessions is a separate decision (see
+  `docs/operations/USER_QUOTAS_AND_RESOURCES.md`).
+
+No `RPROFILE_VERSION` bump (same rule as fix / fix2 / fix3).
+
+### Verification
+
+`tests/rprofile_cgroup_reader_test.R` (in CI): session in
+`rstudio-server.service` with a 400G user slice present ⇒ no limit and the
+right path (the old code's blind spot); user-slice scope ⇒ 400G max / 300G
+high; tightest limit along the path; root cgroup; garbage values; no warnings;
+`MemTotal` vs constant. `tests/templates_parse.sh` green.
+
+---
+
 ## v12.11-fix3 (2026-10-20) — "review fixes: sidecar ties, ranger guard idempotence"
 
 ### Trigger

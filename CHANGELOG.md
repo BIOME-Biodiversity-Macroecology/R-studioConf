@@ -8,6 +8,19 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Fixed (Rprofile v12.11-fix4: RAM values in the RStudio banner)
+
+- Banner and `status()` showed `VM 400GB` from the deploy-time constant
+  `VM_RAM_GB` and `slice limit: none` / `src: not detected` because the cgroup
+  reader looked only in `user.slice/user-<uid>.slice`, while an RStudio rsession
+  runs in `/system.slice/rstudio-server.service` (calc01, 2026-11-25).
+  Fragment 20 now follows `/proc/self/cgroup` up to the root and reads
+  `MemTotal`; fragment 70 prints `usable now` (90% of free RAM), the measured
+  VM total, the real limit and the session cgroup path. Display only, no limit
+  changed. Test `tests/rprofile_cgroup_reader_test.R` (in CI).
+- `docs/operations/USER_QUOTAS_AND_RESOURCES.md`: the `user-.slice.d` limits do
+  not apply to RStudio sessions; read-only checks; what each banner field means.
+
 ### Added (user e-mail from Active Directory, ADR-0010)
 
 - `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`
