@@ -74,6 +74,8 @@ git fetch origin
 git status --short | tee /tmp/status-before.txt | wc -l      # baseline: modified + untracked
 git diff --name-only HEAD -- config/ | wc -l                   # baseline: tracked config edits
 rm -rf /tmp/rsc-main && git worktree add --detach /tmp/rsc-main origin/main
+# effective configuration every script sees today (read-only)
+FIX_SITE_OVERLAY_REPO="$PWD" bash /tmp/rsc-main/scripts/fix_config_site_overlay_inplace.sh --snapshot /tmp/cfg-before.txt
 
 # 1. dry-run: read the plan (keys moved, old -> new values, refusals, other edits)
 FIX_SITE_OVERLAY_REPO="$PWD" bash /tmp/rsc-main/scripts/fix_config_site_overlay_inplace.sh
@@ -84,6 +86,8 @@ sudo FIX_SITE_OVERLAY_REPO="$PWD" bash /tmp/rsc-main/scripts/fix_config_site_ove
 # 3. measure
 git diff --name-only HEAD -- config/ | wc -l                   # target: 0
 git status --short | wc -l
+FIX_SITE_OVERLAY_REPO="$PWD" bash /tmp/rsc-main/scripts/fix_config_site_overlay_inplace.sh --snapshot /tmp/cfg-after.txt
+diff /tmp/cfg-before.txt /tmp/cfg-after.txt && echo "effective configuration unchanged"   # target: no diff
 ```
 
 The script prints "Modified tracked files: N before, M after". `M > 0` means

@@ -210,6 +210,14 @@ contains "dry-run: reports untracked file" "rstudio_download_page.html" "$OUT"
 contains "dry-run: reports comment-only change kept in backup" "comment" "$OUT"
 [[ ! -d "$T/backups" ]] && pass "dry-run: no backup written" || fail "dry-run: no backup written"
 
+# --- snapshot: read-only effective-config dump, for before/after on a host ---
+h_snap="$(treehash "$A")"
+run "$A" --snapshot "$T/snap.before"
+check "snapshot: exit 0" 0 "$RC"
+check "snapshot: tree untouched" "$h_snap" "$(treehash "$A")"
+contains "snapshot: has the host value" 'configure_rstudio.vars.conf: declare -- RSESSION_TIMEOUT_MINUTES="10080"' "$(cat "$T/snap.before" 2>/dev/null)"
+lacks "snapshot: no absolute checkout path" "$A/config" "$(cat "$T/snap.before" 2>/dev/null)"
+
 # --- commit -------------------------------------------------------------------
 run "$A" --commit --upstream-ref upstream
 check "commit: exit 0" 0 "$RC"
@@ -231,6 +239,12 @@ BK="$(find "$T/backups" -mindepth 1 -maxdepth 1 -type d -name 'config-site-overl
 [[ -n "$BK" && -f "$BK/MANIFEST" ]] && pass "commit: backup + MANIFEST written" || fail "commit: backup + MANIFEST written"
 [[ -f "$BK/review/scripts/tools/hw_report.sh.patch" ]] && pass "commit: script patch saved for review" || fail "commit: script patch saved for review"
 contains "commit: says pull is still blocked by script edits" "still" "$OUT"
+run "$A" --snapshot "$T/snap.after"
+if cmp -s "$T/snap.before" "$T/snap.after"; then
+  pass "snapshot: identical before and after the migration"
+else
+  fail "snapshot: identical before and after the migration ($(diff "$T/snap.before" "$T/snap.after" 2>&1 | head -5))"
+fi
 
 # --- idempotent ---------------------------------------------------------------
 h1="$(treehash "$A")"

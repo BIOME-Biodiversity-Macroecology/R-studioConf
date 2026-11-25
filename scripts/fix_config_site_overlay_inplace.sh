@@ -52,6 +52,10 @@ set -euo pipefail
 #   bash scripts/fix_config_site_overlay_inplace.sh                 # dry-run
 #   sudo bash scripts/fix_config_site_overlay_inplace.sh --commit
 #   sudo bash scripts/fix_config_site_overlay_inplace.sh --rollback DIR [--force]
+#   bash scripts/fix_config_site_overlay_inplace.sh --snapshot FILE  # read-only
+#            effective configuration of every config/*.vars.conf (committed
+#            file + overlay), one "file: declare -p" line per variable, sorted;
+#            take one before and one after: `diff` must be empty.
 #   Options: --drop-key KEY        accept upstream for KEY (repeatable)
 #            --upstream-ref REF    ref to compare other edits with (default origin/main)
 #            --force               rollback even if HEAD moved since the backup
@@ -91,6 +95,7 @@ usage() { sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 MODE="dry-run"
 ROLLBACK_DIR=""
+SNAPSHOT_OUT=""
 FORCE=false
 UPSTREAM_REF=""
 DROP_KEYS=()
@@ -98,6 +103,8 @@ while (($#)); do
   case "$1" in
     --commit)       MODE="commit" ;;
     --rollback)     MODE="rollback"; ROLLBACK_DIR="${2:-}"; shift || true ;;
+    --snapshot)     [[ -n "${2:-}" ]] || { log_error "--snapshot needs an output FILE"; exit 2; }
+                    MODE="snapshot"; SNAPSHOT_OUT="$2"; shift ;;
     --force)        FORCE=true ;;
     --drop-key)     [[ -n "${2:-}" ]] || { log_error "--drop-key needs a KEY"; exit 2; }
                     DROP_KEYS+=("$2"); shift ;;
@@ -252,6 +259,27 @@ states_differ() {  # A B
   done
   return 1
 }
+
+if [[ "$MODE" == "snapshot" ]]; then
+  : > "$SNAPSHOT_OUT" || { log_error "Cannot write ${SNAPSHOT_OUT}"; exit 1; }
+  n=0
+  for c in "${REPO}"/config/*.vars.conf; do
+    [[ -f "$c" ]] || continue
+    name="${c##*/}"
+    [[ "$name" == *.site.vars.conf ]] && continue
+    if ! state "${REPO}/config" "$name" "${WORK}/snap.${name}"; then
+      log_error "${name}: cannot be sourced"; exit 1
+    fi
+    for p in "${WORK}/snap.${name}"/*; do
+      [[ -e "$p" ]] || continue
+      while IFS= read -r line; do printf '%s: %s\n' "$name" "$line"; done < "$p"
+    done >> "$SNAPSHOT_OUT"
+    n=$((n + 1))
+  done
+  LC_ALL=C sort -o "$SNAPSHOT_OUT" "$SNAPSHOT_OUT"
+  log_ok "Snapshot of ${n} config file(s), $(wc -l < "$SNAPSHOT_OUT") variable(s): ${SNAPSHOT_OUT}"
+  exit 0
+fi
 
 REFUSE=()
 declare -A NEWSITE=()   # basename -> candidate site file in WORK

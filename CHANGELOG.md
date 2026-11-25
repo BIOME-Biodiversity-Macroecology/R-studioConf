@@ -26,10 +26,11 @@ tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register
   committed file plus its overlay (before: only the 6 mail keys were patched in).
 - `scripts/fix_config_site_overlay_inplace.sh`: in-place migration of host values
   from tracked config into `config/site/` (dry-run, `--commit`, `--rollback`,
-  `--drop-key`); verifies the effective configuration is identical, all or
+  `--drop-key`, read-only `--snapshot FILE` of the effective configuration for
+  before/after comparison on a host); verifies the effective configuration is identical, all or
   nothing, reports `scripts/` edits with their diff. Runbook
   `docs/operations/CONFIG_SITE_OVERLAY.md`.
-- `tests/test_config_site_overlay.sh` (79 checks, in CI).
+- `tests/test_config_site_overlay.sh` (84 checks, in CI).
 
 ### Added (user e-mail from Active Directory, ADR-0010)
 
