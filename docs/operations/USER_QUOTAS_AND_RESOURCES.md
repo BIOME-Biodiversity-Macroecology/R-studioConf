@@ -5,7 +5,7 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/USER_QUOTAS_AND_RESOURCES.md
-last_verified: 2026-10-07
+last_verified: 2026-11-25
 ---
 
 # User Quotas and Resources
@@ -33,6 +33,49 @@ systemctl cat user-.slice
 systemctl show user-$(id -u <user>).slice -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax -p CPUWeight -p IOWeight
 cat /sys/fs/cgroup/user.slice/user-$(id -u <user>).slice/memory.events
 ```
+
+## RStudio sessions and the user-slice limits
+
+The table above applies to processes that systemd places in
+`user.slice/user-<uid>.slice`: SSH and console logins (`pam_systemd`).
+RStudio Server (open source) starts every `rsession` as a child of
+`rstudio-server.service`, so an RStudio session normally runs in
+`/system.slice/rstudio-server.service` and **the `user-.slice.d` limits do not
+apply to it**. The same placement is why `LimitSTACK` in
+`rstudio-server.service.d/50-biome-stack.conf` reaches every rsession, and why
+the journal reports the sessions' `memory peak` under `rstudio-server.service`.
+Under memory pressure the RStudio sessions are therefore limited only by the
+host and by the `system.slice` settings, not by `MemoryHigh/MemoryMax` per user.
+
+Check where a session really runs (read-only):
+
+```bash
+for p in $(pgrep -u <user> rsession); do echo "$p: $(cat /proc/$p/cgroup)"; done
+systemctl show rstudio-server.service -p ControlGroup -p MemoryHigh -p MemoryMax -p MemoryCurrent
+systemctl show user-$(id -u <user>).slice -p MemoryHigh -p MemoryMax -p MemoryCurrent
+cat /sys/fs/cgroup/system.slice/rstudio-server.service/memory.max
+```
+
+Inside R: `readLines("/proc/self/cgroup")` and `biome_cgroup_verify()`.
+
+Whether and how to enforce a memory limit on RStudio sessions (one aggregate
+limit on `rstudio-server.service`, or per-user placement) is an open design
+decision, to be recorded as an ADR; it is not changed by Rprofile v12.11-fix4.
+
+### What the startup banner and `status()` show (v12.11-fix4)
+
+| Field | Source |
+|---|---|
+| `GB usable now` / `RAM Usable` | `floor(0.9 × MemAvailable)` from `/proc/meminfo`, capped by the cgroup `memory.max` when one is set; refreshed by `update_resources()` |
+| `VM total` | `MemTotal` from `/proc/meminfo`; `VM_RAM_GB` from `config/setup_nodes.vars.conf` only if `/proc/meminfo` is unreadable |
+| `memory limit` / `Mem Limit` | tightest `memory.max` (and `memory.high`) on the path from the session's own cgroup (`/proc/self/cgroup`) up to the root; `none` means no limit is set on that path |
+| `cgroup` | the session's cgroup path, e.g. `/system.slice/rstudio-server.service` |
+| BLAS/OMP threads | `min(cores, MAX_BLAS_THREADS)`; cores from `parallel::detectCores()` and `cpu.max` on the same path |
+
+Before v12.11-fix4 the banner printed the deploy-time constant `VM_RAM_GB` as
+`VM <n>GB` and looked for limits only in `user.slice/user-<uid>.slice`, so an
+RStudio session showed `slice limit: none` and `src: not detected` (calc01,
+2026-11-25).
 
 ## CPU and R threads
 

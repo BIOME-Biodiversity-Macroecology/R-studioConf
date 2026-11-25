@@ -13,10 +13,68 @@
   # Checks per-user slice paths first (most specific), then falls back to root.
   # Returns a named list: list(ram_gb = ..., cpus = ..., source = ...)
   # ════════════════════════════════════════════════════════════════════════════
-  .biome_cgroup_read_limits <- function(uid = MY_UID) {
-    result <- list(ram_gb = Inf, cpus = Inf, source = "none")
+  .biome_cgroup_read_limits <- function(uid = MY_UID,
+                                        proc_cgroup = "/proc/self/cgroup",
+                                        cg_root = "/sys/fs/cgroup") {
+    result <- list(ram_gb = Inf, ram_high_gb = Inf, cpus = Inf,
+                   source = "none", cgroup_path = NA_character_)
 
     if (!ENABLE_CGROUP_AWARE) return(result)
+
+    # ── v12.11-fix4: cgroup v2, the cgroup this process actually runs in ──
+    # RStudio Server (open source) starts every rsession as a child of
+    # rstudio-server.service, so a session lives in
+    # /system.slice/rstudio-server.service, NOT in user.slice/user-<uid>.slice.
+    # Reading the user slice by UID reported "not detected" on calc01 although
+    # the kernel was simply applying the limits of another cgroup. Walk from
+    # our own cgroup (/proc/self/cgroup, "0::<path>") up to the root and keep
+    # the tightest memory.max / memory.high / cpu.max on the way.
+    cg_line <- if (file.exists(proc_cgroup)) tryCatch(
+      grep("^0::", suppressWarnings(readLines(proc_cgroup, warn = FALSE)), value = TRUE)[1],
+      error = function(e) NA_character_) else NA_character_
+    if (!is.na(cg_line)) {
+      rel <- sub("^0::", "", cg_line)
+      result$cgroup_path <- if (nzchar(rel)) rel else "/"
+      # A level without the memory/cpu controller has no such file: skip it
+      # silently (a file() warning would print in every user's console).
+      .rd1 <- function(f) {
+        if (!file.exists(f)) return(NA_character_)
+        tryCatch(suppressWarnings(trimws(readLines(f, n = 1, warn = FALSE))[1]),
+                 error = function(e) NA_character_)
+      }
+      lvl <- sub("/+$", "", rel)
+      mem_at <- NA_character_
+      while (nzchar(lvl) && lvl != "/") {
+        d <- file.path(cg_root, sub("^/", "", lvl))
+        mm <- .rd1(file.path(d, "memory.max"))
+        if (!is.na(mm) && mm != "max" && !is.na(suppressWarnings(as.numeric(mm)))) {
+          g <- as.numeric(mm) / (1024^3)
+          if (g < result$ram_gb) { result$ram_gb <- g; mem_at <- lvl }
+        }
+        mh <- .rd1(file.path(d, "memory.high"))
+        if (!is.na(mh) && mh != "max" && !is.na(suppressWarnings(as.numeric(mh)))) {
+          result$ram_high_gb <- min(result$ram_high_gb, as.numeric(mh) / (1024^3))
+        }
+        cm <- .rd1(file.path(d, "cpu.max"))
+        if (!is.na(cm)) {
+          p <- strsplit(cm, " ")[[1]]
+          if (length(p) == 2 && p[1] != "max") {
+            q <- suppressWarnings(as.numeric(p[1])); dd <- suppressWarnings(as.numeric(p[2]))
+            if (!is.na(q) && !is.na(dd) && dd > 0) result$cpus <- min(result$cpus, q / dd)
+          }
+        }
+        lvl <- dirname(lvl)
+      }
+      result$source <- if (!is.na(mem_at)) {
+        if (startsWith(mem_at, "/user.slice")) "cgroupv2-user-slice" else "cgroupv2-self"
+      } else "cgroupv2-unlimited"
+      if (!is.finite(result$ram_gb) || !is.finite(result$cpus)) {
+        sys_log("Cgroup", "INFO", sprintf(
+          "cgroup %s: memory.max=%s cpu.max=%s on the path to the root",
+          result$cgroup_path, format(result$ram_gb), format(result$cpus)))
+      }
+      return(result)
+    }
 
     # ── Build per-user slice paths ─────────────────────────────────────────
     # cgroup v2: unified hierarchy under /sys/fs/cgroup
@@ -146,6 +204,8 @@
     .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
     .biome_env$shared_env$cgroup_cpus <- cg$cpus
     .biome_env$shared_env$cgroup_source <- cg$source
+    .biome_env$shared_env$cgroup_path <- cg$cgroup_path
+    .biome_env$shared_env$cgroup_ram_high_gb <- cg$ram_high_gb
   }, error = function(e) sys_log("Cgroup", "WARN", e$message))
 
   sys_log("Cgroup", "DBG", sprintf("vcores=%d cgroup_cpus=%s cgroup_ram_gb=%s source=%s",
@@ -172,6 +232,18 @@
   }
   .biome_env$.get_ram_gb <- .biome_raw_ram_gb
 
+  # v12.11-fix4: total RAM is measured (MemTotal), not the VM_RAM_GB constant
+  # rendered at deploy time; the constant is only the fallback.
+  .biome_total_ram_gb <- function(meminfo = "/proc/meminfo") {
+    if (!file.exists(meminfo)) return(as.numeric(VM_RAM_GB))
+    tryCatch({
+      tl <- grep("^MemTotal:", suppressWarnings(readLines(meminfo, warn = FALSE)), value = TRUE)
+      v <- as.numeric(sub(".*:\\s+(\\d+).*", "\\1", tl[1])) / 1024 / 1024
+      if (is.finite(v) && v > 0) v else as.numeric(VM_RAM_GB)
+    }, error = function(e) as.numeric(VM_RAM_GB))
+  }
+  .biome_env$shared_env$total_ram_gb <- .biome_total_ram_gb()
+
   get_system_ram_gb <- function() {
     tryCatch({
       ra <- floor(.biome_raw_ram_gb())
@@ -195,6 +267,7 @@
       # bt still caps BLAS threads (CPUWeight != thread count limit).
       ram_gb     <- get_system_ram_gb()
       quota      <- max(2L, as.integer(floor(ram_gb * 0.9)))
+      .biome_env$shared_env$last_free_gb <- ram_gb
       eff_vc     <- total_vcores
       if (is.finite(.biome_env$shared_env$cgroup_cpus))
         eff_vc <- min(eff_vc, as.integer(ceiling(.biome_env$shared_env$cgroup_cpus)))
@@ -251,6 +324,8 @@
           .biome_env$shared_env$cgroup_ram_gb <- cg$ram_gb
           .biome_env$shared_env$cgroup_cpus <- cg$cpus
           .biome_env$shared_env$cgroup_source <- cg$source
+          .biome_env$shared_env$cgroup_path <- cg$cgroup_path
+          .biome_env$shared_env$cgroup_ram_high_gb <- cg$ram_high_gb
         }, error = .biome_swerr("Line_952"))
       }
 

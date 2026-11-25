@@ -187,6 +187,8 @@ jobs:
         run: bash tests/templates_parse.sh
       - name: Home-quota R helper (missing, quota, no-limit, stale, malformed)
         run: Rscript tests/rprofile_quota_test.R
+      - name: cgroup reader + banner RAM values (session cgroup walk, MemTotal, v12.11-fix4)
+        run: Rscript tests/rprofile_cgroup_reader_test.R
       - name: r_lint oracle differ (HC-13 linter stability)
         run: bash tests/r_lint_test.sh
       - name: 99_check_rprofile_health.sh regression (mktemp fixture trees, real R)

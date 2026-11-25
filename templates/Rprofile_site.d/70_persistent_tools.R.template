@@ -29,19 +29,34 @@
     cg_cpu  <- .biome_env$shared_env$cgroup_cpus
     cg_src  <- .biome_env$shared_env$cgroup_source
     if (is.null(cg_src)) cg_src <- "none"
+    cg_path <- .biome_env$shared_env$cgroup_path
+    cg_high <- .biome_env$shared_env$cgroup_ram_high_gb
+    # v12.11-fix4: say where the limit was read, and that "no limit" is a real
+    # reading of this session's own cgroup, not a detection failure.
     cg_src_label <- switch(cg_src,
-      "cgroupv2-user-slice" = "user.slice ceiling [cgroup v2]",
+      "cgroupv2-user-slice" = "user slice, cgroup v2",
+      "cgroupv2-self"       = "session cgroup, cgroup v2",
+      "cgroupv2-unlimited"  = "no memory.max on the session cgroup path, cgroup v2",
       "cgroupv2-root"       = "root cgroup ceiling [cgroup v2]",
       "cgroupv1-user-slice" = "user.slice ceiling [cgroup v1]",
       "cgroupv1-root"       = "root cgroup ceiling [cgroup v1]",
-      "none"                = "not detected — check systemd slice config"
+      "none"                = "cgroup not readable",
+      cg_src
     )
     cg_ram_str <- if (is.finite(cg_ram))
-      sprintf("%.0f GB slice limit", cg_ram) else "no slice limit (CPUWeight fair-share)"
+      sprintf("%.0f GB max", cg_ram) else "no memory limit"
+    if (!is.null(cg_high) && is.finite(cg_high))
+      cg_ram_str <- sprintf("%s, %.0f GB high", cg_ram_str, cg_high)
     cg_cpu_str <- if (is.finite(cg_cpu))
       sprintf("%.1f vCPUs (slice quota)", cg_cpu) else "CPUWeight fair-share (no hard quota)"
-    cat(sprintf("  RAM Available: %d GB  [cgroup: %s | src: %s]\n",
-                .biome_env$shared_env$last_quota, cg_ram_str, cg_src_label))
+    tot_gb  <- .biome_env$shared_env$total_ram_gb
+    free_gb <- .biome_env$shared_env$last_free_gb
+    cat(sprintf("  RAM Usable:    %d GB  [90%% of %s GB free now | VM total: %s GB]\n",
+                .biome_env$shared_env$last_quota,
+                if (is.null(free_gb)) "?" else format(free_gb),
+                if (is.null(tot_gb)) "?" else sprintf("%.0f", tot_gb)))
+    cat(sprintf("  Mem Limit:     %s  [%s | cgroup: %s]\n", cg_ram_str, cg_src_label,
+                if (is.null(cg_path) || is.na(cg_path)) "unknown" else cg_path))
     cat(sprintf("  BLAS Threads:  %d cap  [%s]\n",
                 .biome_env$shared_env$last_threads, cg_cpu_str))
     tmp_str <- tryCatch({
@@ -661,8 +676,23 @@
     cat(sprintf("  Session state:    cgroup_ram_gb=%s | cgroup_cpus=%s\n",
                 format(sess_ram), format(sess_cpu)))
 
+    sess_path <- .biome_env$shared_env$cgroup_path
+    cat(sprintf("  Session cgroup:   %s\n",
+                if (is.null(sess_path) || is.na(sess_path)) "unknown" else sess_path))
+
     # Diagnosis
-    if (!is.finite(sess_ram)) {
+    # v12.11-fix4: an RStudio session normally runs in
+    # /system.slice/rstudio-server.service; logging out does not move it into
+    # user-<uid>.slice, so the per-user slice limits do not apply to it.
+    if (!is.finite(sess_ram) && !is.null(sess_path) && !is.na(sess_path) &&
+        !startsWith(sess_path, "/user.slice")) {
+      cat(paste0("\n  ", .C_YELLOW, "[INFO]", .C_RESET,
+                 " This R session runs in ", sess_path, ",\n"))
+      cat("  not in your user slice, so the per-user limits (user-.slice.d) do not\n")
+      cat("  apply to it and no memory limit is set on its cgroup path.\n")
+      cat("  Logging out will not change this. Admin: see\n")
+      cat("  docs/operations/USER_QUOTAS_AND_RESOURCES.md (RStudio sessions).\n")
+    } else if (!is.finite(sess_ram)) {
       cat(paste0("\n  ", .C_YELLOW, "[ACTION NEEDED]", .C_RESET,
                  " Kernel shows 'max' (unlimited) for your session.\n"))
       cat("  Your login session predates the cgroup deployment. Solutions:\n")
@@ -702,9 +732,15 @@
       # v12.0 [C7]: Banner reflects cgroup enforcement reality.
       .cg_ram <- .biome_env$shared_env$cgroup_ram_gb
       .cg_cpu <- .biome_env$shared_env$cgroup_cpus
-      message(sprintf("\n   RAM:        %-3d GB available  (VM %dGB | slice limit: %s)",
-                       .biome_env$shared_env$last_quota, VM_RAM_GB,
-                       if (is.finite(.cg_ram)) sprintf("%.0f GB", .cg_ram) else "none"))
+      # v12.11-fix4: VM total is measured (MemTotal); usable = 90% of free RAM;
+      # the limit is the one of the cgroup this session really runs in.
+      .tot <- .biome_env$shared_env$total_ram_gb
+      .cgp <- .biome_env$shared_env$cgroup_path
+      message(sprintf("\n   RAM:        %-3d GB usable now  (VM total %.0f GB | memory limit: %s%s)",
+                       .biome_env$shared_env$last_quota,
+                       if (is.null(.tot)) as.numeric(VM_RAM_GB) else .tot,
+                       if (is.finite(.cg_ram)) sprintf("%.0f GB", .cg_ram) else "none",
+                       if (!is.null(.cgp) && !is.na(.cgp)) sprintf(" [%s]", .cgp) else ""))
       message(sprintf("   BLAS/OMP:   %d threads capped  (cores: %d | slice CPU: %s)",
                        .biome_env$shared_env$last_threads,
                        .biome_env$shared_env$last_cores,
