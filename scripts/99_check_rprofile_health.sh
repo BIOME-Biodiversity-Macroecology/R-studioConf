@@ -140,7 +140,10 @@ if [[ -r "$RSTUDIO_VARS_CONF" && -r "${WORKSPACE_ROOT}/lib/site_overlay.sh" ]]; 
     # Effective value, site overlay included (ADR-0011)
     # shellcheck source=../lib/site_overlay.sh disable=SC1091
     source "${WORKSPACE_ROOT}/lib/site_overlay.sh"
-    _lsp="$(site_overlay_get "$RSTUDIO_VARS_CONF" RSTUDIO_PROFILE_SCRIPT_PATH 2>/dev/null || true)"
+    if ! _lsp="$(site_overlay_get "$RSTUDIO_VARS_CONF" RSTUDIO_PROFILE_SCRIPT_PATH)"; then
+        printf '[FAIL] cannot source %s or its site overlay (syntax error?): fix it and re-run\n' "$RSTUDIO_VARS_CONF" >&2
+        exit 1
+    fi
     if [[ -n "$_lsp" ]]; then LOGIN_SCRIPT_PATH="$_lsp"; fi
 fi
 LOGIN_SCRIPT="${BIOME_HEALTH_ROOT}${LOGIN_SCRIPT_PATH}"

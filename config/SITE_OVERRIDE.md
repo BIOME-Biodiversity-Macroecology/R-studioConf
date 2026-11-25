@@ -45,7 +45,8 @@ win. One implementation, `lib/site_overlay.sh` (`site_overlay_source`,
 `site_overlay_get`, `site_overlay_render`), is used by every T1 reader of
 `configure_rstudio`, `install_nginx`, `install_secure_access` and
 `setup_nodes`. The deployed `/etc/biome-calc/conf/setup_nodes.vars.conf` is
-the committed file followed by its overlay.
+the committed file followed by the overlay's effective values, written as plain
+`KEY="value"` lines (what `telemetry_api.py` can parse).
 
 **Never edit a tracked `config/*.vars.conf` on a host**: a host value there
 blocks `git pull --ff-only` as soon as upstream changes the file. To move

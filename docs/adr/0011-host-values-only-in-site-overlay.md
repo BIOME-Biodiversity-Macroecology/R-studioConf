@@ -43,20 +43,26 @@ there was nowhere else to put a host value.
    directly. Every T1 reader of the four files uses it.
 2. **The deployed copy carries the overlay.** `50_setup_nodes.sh` writes
    `/etc/biome-calc/conf/setup_nodes.vars.conf` with `site_overlay_render`
-   (committed file, then the overlay: last assignment wins for both the bash
-   templates that source it and `telemetry_api.py`, which parses it line by line).
+   (committed file, then the overlay's effective values as plain `KEY="value"`
+   lines: last assignment wins for both the bash templates that source it and
+   `telemetry_api.py`, which parses it line by line without expanding `${...}`).
    Before, only the 6 mail keys were patched in, so any other host value moved
    to the overlay would have been lost on the next deploy.
 3. **Rule 19 is enforced in code.** `RPROFILE_VERSION`, `DEFAULT_R_VERSION` and
    `R_CORE_PACKAGES` keep their committed value even if a site file sets them
    (warning, never silent), and `pin_r_version.vars.conf` never takes an overlay.
-   The R/Rprofile version can only change upstream.
+   The R/Rprofile version can only change upstream. Both lists are fixed in code,
+   not read from the environment or from a variable a site file could reassign.
 4. **Migration is an in-place, idempotent script**,
    `scripts/fix_config_site_overlay_inplace.sh`: dry-run by default, `--commit`,
    `--rollback DIR`. It computes the effective configuration (every variable
    after sourcing) before and after, writes the overlay only if they are
    identical, and verifies again on the real checkout (automatic rollback on a
-   mismatch). It is all or nothing, and it changes nothing outside `config/`:
+   mismatch). Under sudo the host files (bash) are evaluated as the checkout
+   owner, never as root. A file edited during the run or after the migration
+   is never overwritten silently, and a rollback only touches the paths a
+   migration can write, in the checkout it was made for. It is all or nothing,
+   and it changes nothing outside `config/`:
    edits to `scripts/` are reported with their diff, and flagged when the same
    content is already in `origin/main`.
 
@@ -69,9 +75,14 @@ there was nowhere else to put a host value.
 - A host value deleted or a protected key edited in a tracked file cannot be
   carried over: the migration refuses until the operator chooses
   `--drop-key KEY` (upstream value applies, the local file stays in the backup).
-- Overlay files are bash and are sourced: a syntax error there breaks the
-  deploy scripts, as it would have in the tracked file. The migration only
-  writes files it has sourced successfully.
+- Overlay files are bash and are sourced: a syntax error there stops the deploy
+  scripts with an error (`site_overlay_get` fails, no silent default), as it
+  would have in the tracked file. The migration only writes files it has
+  sourced successfully.
+- Accepted risk: the deploy scripts themselves still source config and overlay
+  files as root, as they always did with the tracked files. Whoever can edit the
+  checkout can already change what the deploy runs; the migration does not add
+  a new path to root.
 - Not covered: `scripts/` edits (they need a review each, not a mechanical
   move); `config/*.example` and `r_env_manager.conf`.
 - Tier deltas: T1 only. `docker-deploy/` already has its own self-contained

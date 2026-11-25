@@ -162,7 +162,10 @@ if [[ -r "$VARS_CONF" ]]; then
     # Effective value, site overlay included (ADR-0011)
     # shellcheck source=../lib/site_overlay.sh disable=SC1091
     source "${REPO_DIR}/lib/site_overlay.sh"
-    nfs_home="$(site_overlay_get "$VARS_CONF" NFS_HOME 2>/dev/null || true)"
+    if ! nfs_home="$(site_overlay_get "$VARS_CONF" NFS_HOME)"; then
+        log_error "cannot source ${VARS_CONF} or its site overlay (syntax error?): fix it and re-run"
+        exit 1
+    fi
 fi
 log_info "USER_PROJECTS_BASE_DIR=${proj_root:-<unset>}  NFS_HOME=${nfs_home:-<unknown: ${VARS_CONF} unreadable>}"
 if [[ -z "$proj_root" || -z "$nfs_home" || "${proj_root%/}" != "${nfs_home%/}" ]]; then

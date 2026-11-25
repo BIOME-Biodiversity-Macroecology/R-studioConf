@@ -107,6 +107,52 @@ check "render: idempotent" "$h1" "$(sha256sum < "$L/deployed.conf")"
 last="$(grep -E '^TIMEOUT_MIN=' "$L/deployed.conf" | tail -1)"
 check "render: overlay line comes after the committed line" 'TIMEOUT_MIN="10080"' "$last"
 
+
+# --- Sourcery review (PR #70): library hardening -------------------------------
+# get: a config that cannot be sourced is an error, not an empty value
+mkdir -p "$L/bad/site"
+printf 'GOOD="1"\nif then fi (\n' > "$L/bad/broken.vars.conf"
+set +e
+out="$( ( set -u; site_overlay_get "$L/bad/broken.vars.conf" GOOD ) 2>/dev/null)"; rc=$?
+set -e
+[[ $rc -ne 0 ]] && pass "get: unsourceable config -> non-zero exit" || fail "get: unsourceable config -> non-zero exit (rc=$rc, out='$out')"
+# protected list cannot be changed from the environment or from a site file
+out="$(SITE_OVERLAY_PROTECTED_KEYS="NOTHING" bash --noprofile --norc -c '
+  source "$1"; site_overlay_source "$2" 2>/dev/null; printf "%s" "$RPROFILE_VERSION"' _ "$LIB" "$L/config/demo.vars.conf")"
+check "protected list: environment cannot shrink it" "12.11" "$out"
+cp "$L/config/site/demo.site.vars.conf" "$T/demo.site.saved"
+printf 'SITE_OVERLAY_PROTECTED_KEYS="NOTHING"\nRPROFILE_VERSION="77.0"\n' > "$L/config/site/demo.site.vars.conf"
+out="$( ( site_overlay_source "$L/config/demo.vars.conf" 2>/dev/null; printf '%s' "$RPROFILE_VERSION" ) )"
+check "protected list: a site file cannot shrink it" "12.11" "$out"
+# render: protected keys set in any bash form never reach the deployed copy
+printf 'TIMEOUT_MIN="10080"\ndeclare -g RPROFILE_VERSION="88.0"\n' > "$L/config/site/demo.site.vars.conf"
+site_overlay_render "$L/config/demo.vars.conf" "$L/deployed2.conf" 2>/dev/null
+out="$( ( unset RPROFILE_VERSION; source "$L/deployed2.conf"; printf '%s' "$RPROFILE_VERSION" ) )"
+check "render: protected key via declare -g dropped" "12.11" "$out"
+printf 'RPROFILE_VERSION+="-local"\n' > "$L/config/site/demo.site.vars.conf"
+site_overlay_render "$L/config/demo.vars.conf" "$L/deployed2.conf" 2>/dev/null
+out="$( ( unset RPROFILE_VERSION; source "$L/deployed2.conf"; printf '%s' "$RPROFILE_VERSION" ) )"
+check "render: protected key via += dropped" "12.11" "$out"
+# render: line parsers (telemetry_api.py: KEY=value, last wins, no expansion)
+# get evaluated plain values, also for export and ${...} in the site file
+printf 'export SMTP_HOST="smtp.site.example"\nBASE_DIR="/srv/home"\nSITE_TMP="${BASE_DIR}/tmp"\n' > "$L/config/site/demo.site.vars.conf"
+site_overlay_render "$L/config/demo.vars.conf" "$L/deployed3.conf" 2>/dev/null
+check "render: exported key as a plain KEY=value line" 'SMTP_HOST="smtp.site.example"' "$(grep -E '^SMTP_HOST=' "$L/deployed3.conf" | tail -1)"
+check "render: expansion written as its value" 'SITE_TMP="/srv/home/tmp"' "$(grep -E '^SITE_TMP=' "$L/deployed3.conf" | tail -1)"
+out="$( ( unset SMTP_HOST; source "$L/deployed3.conf"; bash -c 'printf "%s" "${SMTP_HOST-}"' ) )"
+check "render: exported key stays exported for sourcing consumers" "smtp.site.example" "$out"
+out="$( ( source "$L/deployed3.conf"; printf '%s' "$TMP_DIR" ) )"
+check "render: committed derived value as the scripts see it" "/nfs/home/Rtmp" "$out"
+cp "$T/demo.site.saved" "$L/config/site/demo.site.vars.conf"
+# the deployed common_utils.sh (copied alone to /etc/biome-calc/script) loads
+mkdir -p "$T/deployed_script"
+cp "${ROOT}/lib/common_utils.sh" "$T/deployed_script/common_utils.sh"
+if bash --noprofile --norc -c 'set -euo pipefail; source "$1"' _ "$T/deployed_script/common_utils.sh" >/dev/null 2>&1; then
+  pass "common_utils.sh copied alone still loads"
+else
+  fail "common_utils.sh copied alone still loads"
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 # 2. Migration fixture: a host checkout with locally modified tracked files
 # ════════════════════════════════════════════════════════════════════════════
@@ -315,9 +361,119 @@ run "$T/hostE" --commit
 check "clean checkout: exit 0" 0 "$RC"
 contains "clean checkout: nothing to migrate" "nothing to migrate" "$OUT"
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# 3b. Sourcery review (PR #70): migration and rollback hardening
+# ════════════════════════════════════════════════════════════════════════════
+latest_bk() {  # REPO -> newest backup dir of that repo
+  local m
+  m="$(grep -l "# repo: $1\$" "$T"/backups/config-site-overlay-*/MANIFEST 2>/dev/null | xargs -r ls -t | head -1 || true)"
+  if [[ -n "$m" ]]; then dirname "$m"; fi
+}
+
+# --- rollback: MANIFEST paths are validated before anything is touched --------
+new_repo "$T/hostF"; F="$T/hostF"
+FHEAD="$(git -C "$F" rev-parse HEAD)"
+echo keep > "$T/victim"
+for bad in '../../victim' 'config/../../victim' 'scripts/tools/hw_report.sh' '/etc/passwd'; do
+  EV="$T/evil.$RANDOM"; mkdir -p "$EV/files/config"
+  printf '# repo: %s\n# head: %s\nN %s\n' "$F" "$FHEAD" "$bad" > "$EV/MANIFEST"
+  run "$F" --rollback "$EV"
+  check "rollback: MANIFEST path '$bad' refused" 1 "$RC"
+done
+check "rollback: file outside the checkout untouched" keep "$(cat "$T/victim")"
+EV="$T/evil.missing"; mkdir -p "$EV/files/config"
+printf '# repo: %s\n# head: %s\nN config/site/setup_nodes.site.vars.conf\nF config/setup_nodes.vars.conf\n' "$F" "$FHEAD" > "$EV/MANIFEST"
+mkdir -p "$F/config/site"; echo 'SMTP_HOST="x"' > "$F/config/site/setup_nodes.site.vars.conf"
+run "$F" --rollback "$EV"
+check "rollback: backup file missing -> refused" 1 "$RC"
+[[ -f "$F/config/site/setup_nodes.site.vars.conf" ]] && pass "rollback: refused before removing anything" || fail "rollback: refused before removing anything"
+rm -rf "$F/config/site"
+
+# --- rollback: backup of another checkout refused -----------------------------
+EV="$T/evil.foreign"; mkdir -p "$EV/files/config"
+printf '# repo: %s\n# head: %s\nN config/site/setup_nodes.site.vars.conf\n' "$T/some-other-checkout" "$FHEAD" > "$EV/MANIFEST"
+run "$F" --rollback "$EV"
+check "rollback: backup of another checkout refused" 1 "$RC"
+contains "rollback: foreign backup named" "another checkout" "$OUT"
+
+# --- rollback: a file changed after the migration is not overwritten silently --
+sed -i 's|^RSERVER_WWW_PORT=.*|RSERVER_WWW_PORT="8790"|' "$F/config/configure_rstudio.vars.conf"
+run "$F" --commit; [[ $RC -eq 0 ]] || { printf "%s\n" "$OUT" | tail -8; }
+check "commit (hostF): exit 0" 0 "$RC"
+BKF="$(latest_bk "$F")"
+echo 'LATER_EDIT="1"' >> "$F/config/site/configure_rstudio.site.vars.conf"
+run "$F" --rollback "$BKF"
+check "rollback: file edited after the migration -> refused" 1 "$RC"
+contains "rollback: edited file named" "configure_rstudio.site.vars.conf" "$OUT"
+contains "rollback: later edit kept" 'LATER_EDIT="1"' "$(cat "$F/config/site/configure_rstudio.site.vars.conf")"
+run "$F" --rollback "$BKF" --force
+check "rollback: --force restores anyway" 0 "$RC"
+contains "rollback --force: host value back in tracked file" 'RSERVER_WWW_PORT="8790"' "$(cat "$F/config/configure_rstudio.vars.conf")"
+
+# --- commit: a backup copy that fails stops everything -------------------------
+new_repo "$T/hostH"; H="$T/hostH"
+sed -i 's|^RSERVER_WWW_PORT=.*|RSERVER_WWW_PORT="8791"|' "$H/config/configure_rstudio.vars.conf"
+sed -i 's|^NFS_HOME=.*|NFS_HOME="/nfs/h"|' "$H/config/setup_nodes.vars.conf"
+hH="$(treehash "$H")"
+set +e
+OUT="$(FIX_SITE_OVERLAY_TEST_FAULT=backup_copy FIX_SITE_OVERLAY_REPO="$H" bash "$SUT" --commit 2>&1)"; RC=$?
+set -e
+check "backup copy fails: exit 1" 1 "$RC"
+contains "backup copy fails: reported" "Backup failed" "$OUT"
+check "backup copy fails: tree untouched" "$hH" "$(treehash "$H")"
+
+# --- commit: a write that fails half way rolls back what was written -----------
+set +e
+OUT="$(FIX_SITE_OVERLAY_TEST_FAULT=write_fail FIX_SITE_OVERLAY_REPO="$H" bash "$SUT" --commit 2>&1)"; RC=$?
+set -e
+check "write fails half way: exit 1" 1 "$RC"
+contains "write fails half way: rolled back" "rolled back" "$OUT"
+check "write fails half way: tree restored" "$hH" "$(treehash "$H")"
+
+# --- commit: a config edited while the script runs is not overwritten ----------
+set +e
+OUT="$(FIX_SITE_OVERLAY_TEST_FAULT=concurrent_edit FIX_SITE_OVERLAY_REPO="$H" bash "$SUT" --commit 2>&1)"; RC=$?
+set -e
+check "edited during the run: exit 1" 1 "$RC"
+contains "edited during the run: reported" "changed since" "$OUT"
+contains "edited during the run: the edit is kept" "CONCURRENT_EDIT" "$(cat "$H/config/configure_rstudio.vars.conf")"
+lacks "edited during the run: nothing written" "migrated from" "$(cat "$H"/config/site/* 2>/dev/null || true)"
+
+# --- commit: mode-only change of a tracked config is restored ------------------
+new_repo "$T/hostM"; M="$T/hostM"
+chmod +x "$M/config/configure_rstudio.vars.conf"
+run "$M" --commit
+check "mode-only change: commit exit 0" 0 "$RC"
+if git -C "$M" diff --quiet HEAD -- config/; then pass "mode-only change: config clean"; else fail "mode-only change: config clean"; fi
+run "$M" --rollback "$(latest_bk "$M")"
+check "mode-only change: rollback exit 0" 0 "$RC"
+[[ -x "$M/config/configure_rstudio.vars.conf" ]] && pass "mode-only change: rollback restores the mode" || fail "mode-only change: rollback restores the mode"
+
+# --- the host config is never executed as root -----------------------------------
+as_root=()
+if [[ "$(id -u)" -eq 0 ]]; then as_root=(env)
+elif sudo -n true 2>/dev/null; then as_root=(sudo -n env)
+fi
+if ((${#as_root[@]})) && id nobody >/dev/null 2>&1; then
+  new_repo "$T/hostP"; P="$T/hostP"
+  mkdir -p "$T/mark"; chmod 777 "$T/mark"; chmod 755 "$T"
+  echo "id -u > \"$T/mark/uid\"" >> "$P/config/configure_rstudio.vars.conf"
+  "${as_root[@]}" chown -R nobody "$P"
+  set +e
+  OUT="$("${as_root[@]}" FIX_SITE_OVERLAY_REPO="$P" FIX_SITE_OVERLAY_BACKUP_ROOT="$T/backups-root" bash "$SUT" 2>&1)"; RC=$?
+  set -e
+  check "as root: dry-run exit 0" 0 "$RC"
+  check "as root: host config evaluated as the checkout owner" "$(id -u nobody)" "$(cat "$T/mark/uid" 2>/dev/null)"
+  "${as_root[@]}" chown -R "$(id -u)" "$P" "$T/mark"
+else
+  echo "NOTE root-only check not run (needs root or passwordless sudo): host config evaluated as the checkout owner"
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 # 4. Every T1 reader of the four host-edited files goes through the overlay
 # ════════════════════════════════════════════════════════════════════════════
+code() { grep -vE '^[[:space:]]*#' "$1"; }   # executable lines only, not comments
 readers=(
   scripts/20_configure_rstudio.sh scripts/30_install_nginx.sh scripts/update_nginx_templates.sh
   scripts/32_setup_letsencrypt.sh scripts/03_install_secure_access.sh scripts/50_setup_nodes.sh
@@ -325,14 +481,26 @@ readers=(
   scripts/fix_login_script_rlibs_inplace.sh scripts/99_check_user_renviron_overrides.sh
 )
 for r in "${readers[@]}"; do
-  if grep -q 'site_overlay_' "${ROOT}/$r"; then pass "reader uses overlay: $r"; else fail "reader uses overlay: $r"; fi
+  if code "${ROOT}/$r" | grep -E 'site_overlay_(source|get)[[:space:]]+"' >/dev/null; then pass "reader calls the overlay: $r"; else fail "reader calls the overlay: $r"; fi
 done
-if grep -q 'site_overlay_render' "${ROOT}/scripts/50_setup_nodes.sh"; then
+# a config that cannot be sourced stops the caller (no silent fallback default)
+for r in scripts/30_install_nginx.sh scripts/update_nginx_templates.sh scripts/fix_login_script_rlibs_inplace.sh \
+         scripts/99_check_rprofile_health.sh scripts/99_check_user_renviron_overrides.sh; do
+  n_get="$(code "${ROOT}/$r" | grep -cE 'site_overlay_get[[:space:]]' || true)"
+  n_chk="$(code "${ROOT}/$r" | grep -cE 'if ! [A-Za-z_]+="\$\(site_overlay_get[[:space:]]' || true)"
+  check "get failure handled, not swallowed: $r" "$n_get" "$n_chk"
+done
+if code "${ROOT}/scripts/50_setup_nodes.sh" | grep -E 'site_overlay_render[[:space:]]+"' >/dev/null; then
   pass "50_setup_nodes deploys setup_nodes.vars.conf with its overlay"
 else
   fail "50_setup_nodes deploys setup_nodes.vars.conf with its overlay"
 fi
-if grep -q 'site_overlay.sh' "${ROOT}/lib/common_utils.sh"; then
+if code "${ROOT}/scripts/50_setup_nodes.sh" | grep -E 'cp .*lib/site_overlay\.sh' >/dev/null; then
+  pass "50_setup_nodes deploys site_overlay.sh next to common_utils.sh"
+else
+  fail "50_setup_nodes deploys site_overlay.sh next to common_utils.sh"
+fi
+if code "${ROOT}/lib/common_utils.sh" | grep 'site_overlay.sh' >/dev/null; then
   pass "common_utils.sh loads site_overlay.sh"
 else
   fail "common_utils.sh loads site_overlay.sh"

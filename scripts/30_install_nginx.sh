@@ -728,7 +728,12 @@ install_and_configure_nginx() {
   if [[ -f "$rstudio_vars_file" ]]; then
     local extracted_timeout
     # Effective value, site overlay included (ADR-0011)
-    extracted_timeout="$(site_overlay_get "$rstudio_vars_file" RSESSION_TIMEOUT_MINUTES | tr -d '[:space:]')"
+    # A config that cannot be sourced stops the deploy: never a silent default.
+    if ! extracted_timeout="$(site_overlay_get "$rstudio_vars_file" RSESSION_TIMEOUT_MINUTES)"; then
+      log "ERROR" "Cannot source ${rstudio_vars_file} or its site overlay (syntax error?): fix it and re-run."
+      exit 1
+    fi
+    extracted_timeout="$(tr -d '[:space:]' <<<"$extracted_timeout")"
     if [[ -n "$extracted_timeout" && "$extracted_timeout" =~ ^[0-9]+$ ]]; then
       rsession_timeout_minutes="$extracted_timeout"
     fi

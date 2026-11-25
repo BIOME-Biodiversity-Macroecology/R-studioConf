@@ -41,6 +41,19 @@ set -euo pipefail
 #     write; files are written to a temp name in their directory, then mv.
 #   * one run at a time (flock on .git/biome-site-overlay.lock); refuses
 #     during a merge/rebase/cherry-pick.
+#   * under sudo the host's config files are evaluated as the checkout owner
+#     (runuser), never as root: they are bash, and whoever can edit them must
+#     not gain root through this script. Their results are copied back as
+#     plain files only.
+#   * a file edited while the script runs is not overwritten: every target is
+#     compared with the copy that was evaluated, before the backup and again
+#     before each write; a failed or interrupted write rolls back what was
+#     already written.
+#   * rollback validates the backup first (MANIFEST paths limited to
+#     config/<name>.vars.conf and config/site/<name>.site.vars.conf, backup
+#     of this checkout, every saved file present) and refuses, without
+#     touching anything, if a file was edited after the migration; --force
+#     overrides that check and the HEAD check, never the path checks.
 #
 # Measure (baseline before --commit, value after):
 #   git -C <checkout> status --porcelain | wc -l      # modified + untracked
@@ -58,7 +71,8 @@ set -euo pipefail
 #            take one before and one after: `diff` must be empty.
 #   Options: --drop-key KEY        accept upstream for KEY (repeatable)
 #            --upstream-ref REF    ref to compare other edits with (default origin/main)
-#            --force               rollback even if HEAD moved since the backup
+#            --force               rollback even if HEAD moved since the backup or a
+#                                  migrated file was edited after the migration
 #            -h|--help
 #   Env:     FIX_SITE_OVERLAY_REPO        (default: this checkout)
 #            FIX_SITE_OVERLAY_BACKUP_ROOT (default /var/backups/biome-calc)
@@ -116,9 +130,12 @@ while (($#)); do
   shift
 done
 
-for bin in git awk grep sed diff cmp sha256sum mktemp cp mv flock date stat; do
+for bin in git awk grep sed diff cmp sha256sum mktemp cp mv flock date stat tar find; do
   command -v "$bin" >/dev/null 2>&1 || { log_error "Missing required binary: $bin"; exit 1; }
 done
+if [[ "$(id -u)" -eq 0 ]]; then
+  command -v runuser >/dev/null 2>&1 || { log_error "Missing required binary: runuser"; exit 1; }
+fi
 
 # Root may run this on a checkout owned by ladmin: tell git it is fine.
 g() { git -c safe.directory="$REPO" -C "$REPO" "$@"; }
@@ -129,34 +146,96 @@ WORK="$(mktemp -d)"
 cleanup() { rm -rf "${WORK:?}"; }
 trap cleanup EXIT
 
-# Writes SRC over DST atomically, keeping DST's owner and mode when it exists.
-install_atomic() {  # SRC DST [MODE-if-new]
-  local src="$1" dst="$2" mode="${3:-600}" tmp
-  tmp="$(mktemp "$(dirname "$dst")/.$(basename "$dst").XXXXXX")"
-  cat "$src" > "$tmp"
-  if [[ -e "$dst" ]]; then
-    chmod --reference="$dst" "$tmp"
-    if is_root; then chown --reference="$dst" "$tmp"; fi
-  else
-    chmod "$mode" "$tmp"
-    if is_root; then chown --reference="$(dirname "$dst")" "$tmp"; fi
+fsha() {  # FILE -> sha256 of its content, "absent" when it does not exist
+  if [[ -e "$1" || -L "$1" ]]; then sha256sum < "$1" | cut -d' ' -f1; else printf 'absent'; fi
+}
+
+# Writes SRC over DST atomically. Owner: DST's (or its directory's when new).
+# Mode: MODE-REF's when given, else DST's, else MODE-if-new. Returns 1 on any
+# failure (callers run it in conditionals, where set -e does not apply).
+install_atomic() {  # SRC DST [MODE-if-new] [MODE-REF]
+  local src="$1" dst="$2" mode="${3:-600}" ref="${4:-}" tmp
+  [[ ! -L "$dst" ]] || { log_error "${dst} is a symlink: not written"; return 1; }
+  tmp="$(mktemp "$(dirname "$dst")/.$(basename "$dst").XXXXXX")" || return 1
+  if ! cat "$src" > "$tmp"; then rm -f "$tmp"; return 1; fi
+  if [[ -n "$ref" ]]; then chmod --reference="$ref" "$tmp" || { rm -f "$tmp"; return 1; }
+  elif [[ -e "$dst" ]]; then chmod --reference="$dst" "$tmp" || { rm -f "$tmp"; return 1; }
+  else chmod "$mode" "$tmp" || { rm -f "$tmp"; return 1; }
   fi
-  mv -f "$tmp" "$dst"
+  if is_root; then
+    if [[ -e "$dst" ]]; then chown --reference="$dst" "$tmp" || { rm -f "$tmp"; return 1; }
+    else chown --reference="$(dirname "$dst")" "$tmp" || { rm -f "$tmp"; return 1; }
+    fi
+  fi
+  mv -f "$tmp" "$dst" || { rm -f "$tmp"; return 1; }
+}
+
+# The only paths a MANIFEST may name: a top-level tracked config or its overlay.
+valid_rel() {  # REL
+  [[ "$1" =~ ^config/[A-Za-z0-9_][A-Za-z0-9_.-]*\.vars\.conf$ \
+  || "$1" =~ ^config/site/[A-Za-z0-9_][A-Za-z0-9_.-]*\.site\.vars\.conf$ ]] && [[ "$1" != *..* ]]
 }
 
 # ── Rollback ────────────────────────────────────────────────────────────────
-# MANIFEST: "# key: value" header, then "F <relpath>" (saved under files/) or
-# "N <relpath>" (did not exist before: removed on rollback).
-do_rollback() {  # DIR
-  local dir="$1" tag rel
+# MANIFEST: "# key: value" header, then "F <relpath>" (saved under files/),
+# "N <relpath>" (did not exist before: removed on rollback), and after the
+# write "A <sha256|absent> <relpath>" (content the migration left there).
+# Everything is validated before the first file is touched; then each step is
+# checked and the first failure stops the rollback with exit 1.
+do_rollback() {  # DIR FORCE(true|false)
+  local dir="$1" force="${2:-false}" tag a b rel bk_repo here there
+  local -a errs=() edited=()
   [[ -n "$dir" && -f "${dir}/MANIFEST" ]] || { log_error "No MANIFEST in '${dir}'"; return 1; }
-  while read -r tag rel; do
+  bk_repo="$(awk -F': ' '/^# repo: /{print $2; exit}' "${dir}/MANIFEST")"
+  here="$(cd "$REPO" && pwd -P)"
+  there="$(cd "$bk_repo" 2>/dev/null && pwd -P || printf '%s' "$bk_repo")"
+  if [[ -z "$bk_repo" || "$there" != "$here" ]]; then
+    log_error "Backup ${dir} belongs to another checkout (${bk_repo:-none recorded}), not ${REPO}: nothing restored."
+    return 1
+  fi
+  for d in "${REPO}/config" "${REPO}/config/site"; do
+    [[ ! -L "$d" ]] || errs+=("${d} is a symlink")
+  done
+  while read -r tag a b; do
     case "$tag" in
-      F) install_atomic "${dir}/files/${rel}" "${REPO}/${rel}"; log_ok "Restored ${rel}" ;;
-      N) rm -f "${REPO}/${rel}"; log_ok "Removed ${rel} (did not exist before)" ;;
+      ''|'#'*) continue ;;
+      F|N) rel="$a"; [[ -z "$b" ]] || { errs+=("bad line: ${tag} ${a} ${b}"); continue; } ;;
+      A)   rel="$b"; [[ "$a" =~ ^([0-9a-f]{64}|absent)$ ]] || { errs+=("bad line: A ${a} ${b}"); continue; } ;;
+      *)   errs+=("unknown MANIFEST line: ${tag} ${a} ${b}"); continue ;;
+    esac
+    if ! valid_rel "$rel"; then errs+=("path not allowed in a MANIFEST: ${rel}"); continue; fi
+    if [[ "$tag" == F && ( ! -f "${dir}/files/${rel}" || -L "${dir}/files/${rel}" ) ]]; then
+      errs+=("saved file missing from the backup: files/${rel}")
+    fi
+    if [[ -L "${REPO}/${rel}" ]]; then errs+=("${rel} is a symlink in the checkout"); fi
+    if [[ "$tag" == A && "$(fsha "${REPO}/${rel}")" != "$a" ]]; then edited+=("$rel"); fi
+  done < "${dir}/MANIFEST"
+  if ((${#errs[@]})); then
+    for a in "${errs[@]}"; do log_error "$a"; done
+    log_error "Backup ${dir} is not valid: nothing restored."
+    return 1
+  fi
+  if ((${#edited[@]})); then
+    if [[ "$force" == true ]]; then
+      log_warn "Edited after the migration, overwritten (--force): ${edited[*]}"
+    else
+      for a in "${edited[@]}"; do log_error "${a}: changed since the migration; restoring would lose that edit"; done
+      log_error "Nothing restored. Save the edits, then re-run with --force."
+      return 1
+    fi
+  fi
+  while read -r tag a b; do
+    case "$tag" in
+      F) mkdir -p "$(dirname "${REPO}/${a}")" || return 1
+         install_atomic "${dir}/files/${a}" "${REPO}/${a}" 600 "${dir}/files/${a}" \
+           || { log_error "Could not restore ${a}: rollback incomplete"; return 1; }
+         log_ok "Restored ${a}" ;;
+      N) rm -f "${REPO}/${a}" || { log_error "Could not remove ${a}: rollback incomplete"; return 1; }
+         log_ok "Removed ${a} (did not exist before)" ;;
       *) : ;;
     esac
   done < "${dir}/MANIFEST"
+  return 0
 }
 
 g rev-parse --is-inside-work-tree >/dev/null 2>&1 || { log_error "Not a git checkout: ${REPO}"; exit 1; }
@@ -173,7 +252,7 @@ if [[ "$MODE" == "rollback" ]]; then
     log_error "be local edits against a newer commit. Re-run with --force if that is what you want."
     exit 1
   fi
-  do_rollback "$ROLLBACK_DIR" || exit 1
+  do_rollback "$ROLLBACK_DIR" "$FORCE" || exit 1
   log_ok "Rollback complete (${ROLLBACK_DIR})"
   exit 0
 fi
@@ -230,9 +309,37 @@ for __v in $(compgen -v); do
   printf "%s\n" "$__d" > "$4/$__v"
 done
 '
+# Under sudo the files are bash written on the host: they are evaluated as the
+# owner of the checkout's config/ in a scratch directory of that user, and only
+# regular files come back (copied without following links, then checked).
+EVAL_USER=""
+if is_root; then
+  EVAL_USER="$(stat -c %U "${REPO}/config" 2>/dev/null || true)"
+  [[ "$EVAL_USER" == root || "$EVAL_USER" == UNKNOWN ]] && EVAL_USER=""
+fi
 state() {  # DIR NAME OUT
+  local u rc=0
   rm -rf "$3"
-  env -i PATH="$PATH" HOME="${HOME:-/root}" bash --noprofile --norc -c "$EVAL_SRC" _ "$OVERLAY_LIB" "$1" "$2" "$3"
+  if [[ -z "$EVAL_USER" ]]; then
+    env -i PATH="$PATH" HOME="${HOME:-/root}" bash --noprofile --norc -c "$EVAL_SRC" _ "$OVERLAY_LIB" "$1" "$2" "$3"
+    return
+  fi
+  u="$(cd / && runuser -u "$EVAL_USER" -- mktemp -d)" || return 1
+  (
+    cd / || exit 1
+    tar -C "$1" -cf - . | runuser -u "$EVAL_USER" -- tar -C "$u" --no-same-owner -xf - \
+      && runuser -u "$EVAL_USER" -- tee "${u}/.site_overlay.sh" < "$OVERLAY_LIB" >/dev/null \
+      && runuser -u "$EVAL_USER" -- env -i PATH="$PATH" HOME="$u" bash --noprofile --norc -c "$EVAL_SRC" \
+           _ "${u}/.site_overlay.sh" "$u" "$2" "${u}/.out"
+  ) || rc=$?
+  if ((rc == 0)); then
+    cp -rP "${u}/.out" "$3" || rc=1
+    if ((rc == 0)) && [[ -n "$(find "$3" -mindepth 1 ! -type f -print -quit)" ]]; then
+      log_error "Evaluation of ${2} returned something other than plain files: refused"; rc=1
+    fi
+  fi
+  (cd / && runuser -u "$EVAL_USER" -- rm -rf "$u") || true
+  return "$rc"
 }
 rhs() { local d; d="$(cat "$1")"; d="${d#declare * }"; printf '%s' "${d#*=}"; }
 show() {  # KEY VALUE -> masked when the key looks secret
@@ -434,44 +541,110 @@ if [[ "$MODE" == "dry-run" ]]; then
 fi
 
 # ── Commit ──────────────────────────────────────────────────────────────────
+# Every file this run writes, as "<rel> <copy evaluated in WORK/before>":
+# the target must still have that content, else a concurrent edit would be lost.
+TARGETS=()
+for f in "${MIG[@]}"; do
+  TARGETS+=("config/${f}")
+  TARGETS+=("${SITEREL[$f]}")
+done
+expected_of() {  # REL -> path of the evaluated copy (may not exist)
+  printf '%s/before/%s' "$WORK" "${1#config/}"
+}
+unchanged_since_eval() {  # REL
+  [[ "$(fsha "${REPO}/${1}")" == "$(fsha "$(expected_of "$1")")" ]]
+}
+
+if [[ "${FIX_SITE_OVERLAY_TEST_FAULT:-}" == concurrent_edit ]]; then   # tests only
+  echo 'CONCURRENT_EDIT="1"' >> "${REPO}/config/${MIG[0]}"
+fi
+moved=()
+for rel in "${TARGETS[@]}"; do unchanged_since_eval "$rel" || moved+=("$rel"); done
+if ((${#moved[@]})); then
+  for rel in "${moved[@]}"; do log_error "${rel}: changed since this run read it (edited meanwhile?)"; done
+  log_error "Nothing written: re-run the dry-run and then --commit."
+  exit 1
+fi
+
 BK="${BACKUP_ROOT}/config-site-overlay-${TS}-$$"
 ( umask 077 && mkdir -p "${BK}/files/config/site" "${BK}/review" ) \
   || { log_error "Cannot create backup ${BK} (run with sudo, or set FIX_SITE_OVERLAY_BACKUP_ROOT)"; exit 1; }
+backup_fail() { log_error "Backup failed (${1}): nothing written. Partial backup left in ${BK}"; exit 1; }
+MANIFEST_LINES=()
+for rel in "${TARGETS[@]}"; do
+  if [[ -e "${REPO}/${rel}" ]]; then
+    if [[ "${FIX_SITE_OVERLAY_TEST_FAULT:-}" == backup_copy ]]; then   # tests only
+      backup_fail "cp ${rel}"
+    fi
+    cp -p "${REPO}/${rel}" "${BK}/files/${rel}" || backup_fail "cp ${rel}"
+    cmp -s "${BK}/files/${rel}" "$(expected_of "$rel")" || backup_fail "${rel} differs from what was evaluated"
+    MANIFEST_LINES+=("F ${rel}")
+  else
+    MANIFEST_LINES+=("N ${rel}")
+  fi
+done
 {
   printf '# repo: %s\n# head: %s\n# created: %s\n' "$REPO" "$HEAD_SHA" "$TS"
-  for f in "${MIG[@]}"; do
-    cp -p "${REPO}/config/${f}" "${BK}/files/config/${f}"; printf 'F config/%s\n' "$f"
-    rel="${SITEREL[$f]}"
-    if [[ -f "${REPO}/${rel}" ]]; then
-      cp -p "${REPO}/${rel}" "${BK}/files/${rel}"; printf 'F %s\n' "$rel"
-    else
-      printf 'N %s\n' "$rel"
-    fi
-  done
-} > "${BK}/MANIFEST" || { log_error "Backup failed: nothing written"; exit 1; }
-g diff HEAD > "${BK}/worktree.diff" || true
-g status --porcelain > "${BK}/status.txt" || true
-printf '%s\n' "${UNTRACKED[@]}" > "${BK}/untracked.txt"
+  printf '%s\n' "${MANIFEST_LINES[@]}"
+} > "${BK}/MANIFEST" || backup_fail "MANIFEST"
+g diff HEAD > "${BK}/worktree.diff" || backup_fail "worktree.diff"
+g status --porcelain > "${BK}/status.txt" || backup_fail "status.txt"
+printf '%s\n' "${UNTRACKED[@]}" > "${BK}/untracked.txt" || backup_fail "untracked.txt"
 for p in "${OTHER[@]}"; do
-  mkdir -p "${BK}/review/$(dirname "$p")"
-  g diff HEAD -- "$p" > "${BK}/review/${p}.patch" || true
+  mkdir -p "${BK}/review/$(dirname "$p")" || backup_fail "review/"
+  g diff HEAD -- "$p" > "${BK}/review/${p}.patch" || backup_fail "review/${p}.patch"
 done
 log_ok "Backup: ${BK}"
 
-if [[ ! -d "${REPO}/config/site" ]]; then
-  mkdir -p "${REPO}/config/site"
-  # created as root under sudo: give it the checkout's owner, like config/
-  if is_root; then chown --reference="${REPO}/config" "${REPO}/config/site"; fi
-  chmod 700 "${REPO}/config/site"
-fi
-for f in "${MIG[@]}"; do
-  if [[ -n "${NEWSITE[$f]:-}" ]]; then
-    install_atomic "${NEWSITE[$f]}" "${REPO}/${SITEREL[$f]}" 600
-    log_ok "Wrote ${SITEREL[$f]}"
+# exec bit as at HEAD (git tracks only that): a mode-only edit is restored too
+head_exec_bit() {  # REL FILE
+  local m
+  m="$(g ls-tree HEAD -- "$1" | awk '{print $1}')"
+  case "$m" in
+    100755) chmod u+x "$2" ;;
+    100644) chmod a-x "$2" ;;
+    *) return 0 ;;
+  esac
+}
+written() {  # REL: record what the migration left there (checked on rollback)
+  printf 'A %s %s\n' "$(fsha "${REPO}/${1}")" "$1" >> "${BK}/MANIFEST"
+}
+write_all() {  # called in a conditional: every step checked by hand
+  local f n=0
+  if [[ ! -d "${REPO}/config/site" ]]; then
+    mkdir -p "${REPO}/config/site" || return 1
+    # created as root under sudo: give it the checkout's owner, like config/
+    if is_root; then chown --reference="${REPO}/config" "${REPO}/config/site" || return 1; fi
+    chmod 700 "${REPO}/config/site" || return 1
   fi
-  install_atomic "${WORK}/after/${f}" "${REPO}/config/${f}"
-  log_ok "Restored config/${f} to HEAD"
-done
+  for f in "${MIG[@]}"; do
+    if [[ -n "${NEWSITE[$f]:-}" ]]; then
+      unchanged_since_eval "${SITEREL[$f]}" || { log_error "${SITEREL[$f]}: changed since this run read it"; return 1; }
+      install_atomic "${NEWSITE[$f]}" "${REPO}/${SITEREL[$f]}" 600 || { log_error "Could not write ${SITEREL[$f]}"; return 1; }
+      written "${SITEREL[$f]}" || return 1
+      log_ok "Wrote ${SITEREL[$f]}"
+    fi
+    n=$((n + 1))
+    if [[ "${FIX_SITE_OVERLAY_TEST_FAULT:-}" == write_fail && $n -eq 2 ]]; then   # tests only
+      log_error "Could not write config/${f} (injected fault)"; return 1
+    fi
+    unchanged_since_eval "config/${f}" || { log_error "config/${f}: changed since this run read it"; return 1; }
+    install_atomic "${WORK}/after/${f}" "${REPO}/config/${f}" || { log_error "Could not restore config/${f}"; return 1; }
+    head_exec_bit "config/${f}" "${REPO}/config/${f}" || { log_error "Could not set the mode of config/${f}"; return 1; }
+    written "config/${f}" || return 1
+    log_ok "Restored config/${f} to HEAD"
+  done
+}
+abort_writes() {  # REASON
+  trap - INT TERM HUP
+  log_error "$1: rolling back what was written"
+  do_rollback "$BK" true || { log_error "AUTOMATIC ROLLBACK FAILED: restore by hand from ${BK}"; exit 1; }
+  log_error "All changes rolled back from ${BK}"
+  exit 1
+}
+trap 'abort_writes "Interrupted"' INT TERM HUP
+write_all || abort_writes "Write failed"
+trap - INT TERM HUP
 
 if [[ "${FIX_SITE_OVERLAY_TEST_FAULT:-}" == post_write ]]; then   # tests only
   for f in "${MIG[@]}"; do
@@ -489,10 +662,7 @@ for f in "${MIG[@]}"; do
   fi
 done
 if ((${#bad[@]})); then
-  log_error "Verification failed after write for: ${bad[*]}"
-  do_rollback "$BK" || { log_error "AUTOMATIC ROLLBACK FAILED: restore by hand from ${BK}"; exit 1; }
-  log_error "All changes rolled back from ${BK}"
-  exit 1
+  abort_writes "Verification failed after write for: ${bad[*]}"
 fi
 
 log_head "Done"

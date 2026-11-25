@@ -2281,11 +2281,13 @@ setup_nodes_orphan_cleanup() {
   
   # Deploy library for archiver alignment
   if [[ "${DRY_RUN}" == "true" ]]; then
-    log_info "[DRY-RUN] Deploying common_utils.sh to ${BIOME_CONF}/script/"
+    log_info "[DRY-RUN] Deploying common_utils.sh + site_overlay.sh to ${BIOME_CONF}/script/"
   else
+    # common_utils.sh sources site_overlay.sh from its own directory (ADR-0011)
+    run_cmd cp -f "${WORKSPACE_ROOT}/lib/site_overlay.sh" "${BIOME_CONF}/script/site_overlay.sh"
     run_cmd cp -f "${WORKSPACE_ROOT}/lib/common_utils.sh" "${BIOME_CONF}/script/common_utils.sh"
     run_cmd chmod +x "${BIOME_CONF}/script/common_utils.sh"
-    log_success "Deployed common_utils.sh library"
+    log_success "Deployed common_utils.sh + site_overlay.sh libraries"
   fi
 
   # 4. Bind to cron

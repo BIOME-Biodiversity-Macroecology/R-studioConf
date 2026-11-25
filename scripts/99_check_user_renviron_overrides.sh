@@ -73,7 +73,12 @@ if [[ -r "$CONF_FILE" ]]; then
     # Effective value, site overlay included (ADR-0011)
     # shellcheck source=../lib/site_overlay.sh disable=SC1091
     source "${SCRIPT_DIR}/../lib/site_overlay.sh"
-    NFS_HOME_FROM_CONF="$(site_overlay_get "$CONF_FILE" NFS_HOME 2>/dev/null | tr -d '[:space:]' || true)"
+    # A broken config stops the audit (and --fix) instead of falling back to a default path
+    if ! NFS_HOME_FROM_CONF="$(site_overlay_get "$CONF_FILE" NFS_HOME)"; then
+        printf '[FAIL] cannot source %s or its site overlay (syntax error?): fix it and re-run\n' "$CONF_FILE" >&2
+        exit 1
+    fi
+    NFS_HOME_FROM_CONF="$(tr -d '[:space:]' <<<"$NFS_HOME_FROM_CONF")"
     [[ -n "${NFS_HOME_FROM_CONF:-}" ]] && NFS_HOME="$NFS_HOME_FROM_CONF"
 fi
 NFS_HOME="${NFS_HOME:-$NFS_HOME_DEFAULT}"

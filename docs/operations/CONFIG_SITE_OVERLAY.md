@@ -5,7 +5,7 @@ audience: operator
 status: current
 tier: T1
 source_path: docs/operations/CONFIG_SITE_OVERLAY.md
-last_verified: 2026-11-19
+last_verified: 2026-11-25
 ---
 
 # Host values in `config/site/`: migration runbook
@@ -61,6 +61,15 @@ Do steps 1 and 2 back to back, and deploy nothing in between.
   before any write: the host files, the existing overlay files, `worktree.diff`,
   `status.txt`, `untracked.txt`, and `review/<path>.patch` for every other
   modified tracked file.
+  A backup copy that fails stops the run before any write.
+- Under `sudo` the host files (they are bash) are evaluated as the owner of
+  the checkout's `config/` (`runuser`), never as root.
+- A file edited while the script runs is not overwritten: each target is
+  compared with what was evaluated, before the backup and before each write. A
+  write that fails, or Ctrl-C/kill during the writes, rolls back what was
+  already written.
+- A mode-only change (`chmod +x`) of a tracked config is restored to its mode
+  at `HEAD`.
 - One run at a time (`flock` on `.git/biome-site-overlay.lock`); refused during
   a merge, rebase or cherry-pick.
 
@@ -124,10 +133,19 @@ sudo FIX_SITE_OVERLAY_REPO=/home/ladmin/configServices/R-studioConf \
   --rollback /var/backups/biome-calc/config-site-overlay-<ts>-<pid>
 ```
 
-Restores the host files and the overlay files exactly, and removes the overlay
-files the migration created. It refuses if `HEAD` moved since the backup (after
-a pull the restored files would be edits against a newer commit); `--force`
-overrides that.
+Restores the host files and the overlay files exactly (content and mode), and
+removes the overlay files the migration created. It checks the whole backup
+before touching anything and refuses, with exit 1 and nothing changed, when:
+
+- the backup belongs to another checkout (`# repo:` in `MANIFEST`);
+- a `MANIFEST` line names anything but `config/<name>.vars.conf` or
+  `config/site/<name>.site.vars.conf`, or a saved file is missing;
+- `HEAD` moved since the backup (after a pull the restored files would be
+  edits against a newer commit);
+- a migrated file was edited after the migration (restoring would lose it).
+
+`--force` overrides the last two only. Any restore step that fails stops the
+rollback with exit 1: "Rollback complete" means every file was restored.
 
 ## 7. Adding a host value later
 
