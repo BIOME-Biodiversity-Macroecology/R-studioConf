@@ -147,7 +147,8 @@ cp "$T/demo.site.saved" "$L/config/site/demo.site.vars.conf"
 # the deployed common_utils.sh (copied alone to /etc/biome-calc/script) loads
 mkdir -p "$T/deployed_script"
 cp "${ROOT}/lib/common_utils.sh" "$T/deployed_script/common_utils.sh"
-if bash --noprofile --norc -c 'set -euo pipefail; source "$1"' _ "$T/deployed_script/common_utils.sh" >/dev/null 2>&1; then
+# (LOG_FILE: the library defaults to /var/log/biome-log, root-only; as in the bats tests)
+if LOG_FILE="$T/common_utils.log" bash --noprofile --norc -c 'set -euo pipefail; source "$1"' _ "$T/deployed_script/common_utils.sh" >/dev/null 2>&1; then
   pass "common_utils.sh copied alone still loads"
 else
   fail "common_utils.sh copied alone still loads"
