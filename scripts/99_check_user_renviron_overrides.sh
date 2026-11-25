@@ -70,7 +70,15 @@ CONF_FILE="${SCRIPT_DIR}/../config/setup_nodes.vars.conf"
 
 # Read NFS_HOME from project conf if available (single source of truth)
 if [[ -r "$CONF_FILE" ]]; then
-    NFS_HOME_FROM_CONF="$(awk -F'=' '/^[[:space:]]*NFS_HOME[[:space:]]*=/ {gsub(/"/,"",$2); gsub(/[[:space:]]/,"",$2); print $2; exit}' "$CONF_FILE" || true)"
+    # Effective value, site overlay included (ADR-0011)
+    # shellcheck source=../lib/site_overlay.sh disable=SC1091
+    source "${SCRIPT_DIR}/../lib/site_overlay.sh"
+    # A broken config stops the audit (and --fix) instead of falling back to a default path
+    if ! NFS_HOME_FROM_CONF="$(site_overlay_get "$CONF_FILE" NFS_HOME)"; then
+        printf '[FAIL] cannot source %s or its site overlay (syntax error?): fix it and re-run\n' "$CONF_FILE" >&2
+        exit 1
+    fi
+    NFS_HOME_FROM_CONF="$(tr -d '[:space:]' <<<"$NFS_HOME_FROM_CONF")"
     [[ -n "${NFS_HOME_FROM_CONF:-}" ]] && NFS_HOME="$NFS_HOME_FROM_CONF"
 fi
 NFS_HOME="${NFS_HOME:-$NFS_HOME_DEFAULT}"

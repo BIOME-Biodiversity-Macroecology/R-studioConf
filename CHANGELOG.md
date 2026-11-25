@@ -8,6 +8,56 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Added (host values only in `config/site/`, ADR-0011)
+
+- `lib/site_overlay.sh`: one overlay rule for every `config/<name>.vars.conf`
+  (`config/site/<name>.site.vars.conf`, sourced after it):
+  `site_overlay_source`, `site_overlay_get`, `site_overlay_render`. Loaded by
+  `lib/common_utils.sh`. Rule 19 enforced: `RPROFILE_VERSION`,
+  `DEFAULT_R_VERSION`, `R_CORE_PACKAGES` are ignored in an overlay (warning),
+  `pin_r_version.vars.conf` takes none.
+- Readers now honour the overlay: `20_configure_rstudio.sh`, `30_install_nginx.sh`
+  and `update_nginx_templates.sh` (also the nginx timeout taken from
+  `RSESSION_TIMEOUT_MINUTES`), `32_setup_letsencrypt.sh`,
+  `03_install_secure_access.sh`, `50_setup_nodes.sh`, `99_audit_r_environment.sh`,
+  `99_check_pkg_drift.sh`, `99_check_rprofile_health.sh`,
+  `99_check_user_renviron_overrides.sh`, `fix_login_script_rlibs_inplace.sh`.
+- `50_setup_nodes.sh` deploys `/etc/biome-calc/conf/setup_nodes.vars.conf` as the
+  committed file plus its overlay (before: only the 6 mail keys were patched in).
+- `scripts/fix_config_site_overlay_inplace.sh`: in-place migration of host values
+  from tracked config into `config/site/` (dry-run, `--commit`, `--rollback`,
+  `--drop-key`, read-only `--snapshot FILE` of the effective configuration for
+  before/after comparison on a host); verifies the effective configuration is identical, all or
+  nothing, reports `scripts/` edits with their diff. Runbook
+  `docs/operations/CONFIG_SITE_OVERLAY.md`.
+- `tests/test_config_site_overlay.sh` (126 checks, in CI; the root-only check
+  runs as root or with passwordless sudo, as on the CI runners).
+
+### Changed (PR #70 review by Sourcery, before any host ran it)
+
+- Migration: MANIFEST paths limited to `config/<name>.vars.conf` and
+  `config/site/<name>.site.vars.conf` (a crafted backup could make the root
+  rollback write or delete outside the checkout); a backup of another checkout
+  is refused; the whole backup is validated before the first file is touched;
+  each restore is checked and a failure exits 1 (no false "complete").
+- Migration: under sudo the host config files are evaluated as the checkout
+  owner (`runuser`), not as root; only plain files come back.
+- Migration: a failed backup copy stops before any write; a failed or
+  interrupted write rolls back what was written; a file edited while the script
+  runs, or after the migration, is not overwritten (rollback needs `--force`);
+  a mode-only change of a tracked config is restored to the mode at `HEAD`.
+- `site_overlay_get` exits 1 when the config or its overlay cannot be sourced;
+  its five callers stop with an error instead of using a default.
+- Protected keys (rule 19) are fixed in code: the environment or a site file can
+  no longer shrink the list.
+- `site_overlay_render` writes the overlay's effective values as plain
+  `KEY="value"` lines (plus `export KEY`), not the site file's text: protected
+  keys can no longer slip through as `declare -g`/`+=`, and `telemetry_api.py`
+  (line parser, no `${...}` expansion, no `export`) reads the same values.
+- `50_setup_nodes.sh` deploys `site_overlay.sh` next to `common_utils.sh` in
+  `/etc/biome-calc/script/`; `common_utils.sh` loads it only when present, so
+  `scopri_progetti.sh` and `unibo_archive_manager.sh` keep working.
+
 ### Added (user e-mail from Active Directory, ADR-0010)
 
 - `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`

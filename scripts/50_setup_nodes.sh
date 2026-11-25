@@ -51,20 +51,18 @@ if [[ ! -f "${VARS_CONF}" ]]; then
   log "ERROR" "Missing config: ${VARS_CONF}"
   exit 1
 fi
-# shellcheck source=../config/setup_nodes.vars.conf disable=SC1091
-source "${VARS_CONF}"
-
-# Site-local override (HC-12): real SMTP host / mail domains / DNS / contact live
-# in config/site/setup_nodes.site.vars.conf (gitignored). The committed
+# Site-local override (HC-12, ADR-0011): real SMTP host / mail domains / DNS /
+# contact, and any other host value, live in
+# config/site/setup_nodes.site.vars.conf (gitignored), sourced after the
+# committed file by site_overlay_source (lib/site_overlay.sh). The committed
 # setup_nodes.vars.conf carries only sanitized example values for these keys.
-SITE_VARS_CONF="${WORKSPACE_ROOT}/config/site/setup_nodes.site.vars.conf"
+SITE_VARS_CONF="$(site_overlay_path "${VARS_CONF}")"
 if [[ -f "${SITE_VARS_CONF}" ]]; then
   log "INFO" "Applying site-local override: ${SITE_VARS_CONF}"
-  # shellcheck source=/dev/null
-  source "${SITE_VARS_CONF}"
 else
   log "WARN" "No site-local override at ${SITE_VARS_CONF}; using sanitized example mail/SMTP defaults from setup_nodes.vars.conf."
 fi
+site_overlay_source "${VARS_CONF}"
 
 # ── Template paths ──
 RPROFILE_TEMPLATE="${WORKSPACE_ROOT}/templates/Rprofile_site.R.template"
@@ -2208,7 +2206,14 @@ setup_nodes_orphan_cleanup() {
   run_cmd cp -f "${_ar_src}" "${BIOME_CONF}/conf/admin_recipients.txt"
   run_cmd cp -f "${_uem_src}" "${BIOME_CONF}/conf/user_email_map.txt"
   
-  run_cmd cp -f "${VARS_CONF}" "${BIOME_CONF}/conf/setup_nodes.vars.conf"
+  # Deployed copy = committed file + site overlay (ADR-0011): templates source
+  # it and telemetry_api.py parses it, so it must carry every host value, not
+  # only the 6 mail keys patched below.
+  if [[ "${DRY_RUN}" == true ]]; then
+    log_info "[DRY-RUN] site_overlay_render ${VARS_CONF} -> ${BIOME_CONF}/conf/setup_nodes.vars.conf"
+  else
+    site_overlay_render "${VARS_CONF}" "${BIOME_CONF}/conf/setup_nodes.vars.conf" || exit 1
+  fi
 
   # HC-12 site overlay: VARS_CONF is the committed, sanitized template — the
   # `cp` above deploys placeholder SMTP_HOST/SMTP_DNS_SERVERS/etc. verbatim.
@@ -2276,11 +2281,13 @@ setup_nodes_orphan_cleanup() {
   
   # Deploy library for archiver alignment
   if [[ "${DRY_RUN}" == "true" ]]; then
-    log_info "[DRY-RUN] Deploying common_utils.sh to ${BIOME_CONF}/script/"
+    log_info "[DRY-RUN] Deploying common_utils.sh + site_overlay.sh to ${BIOME_CONF}/script/"
   else
+    # common_utils.sh sources site_overlay.sh from its own directory (ADR-0011)
+    run_cmd cp -f "${WORKSPACE_ROOT}/lib/site_overlay.sh" "${BIOME_CONF}/script/site_overlay.sh"
     run_cmd cp -f "${WORKSPACE_ROOT}/lib/common_utils.sh" "${BIOME_CONF}/script/common_utils.sh"
     run_cmd chmod +x "${BIOME_CONF}/script/common_utils.sh"
-    log_success "Deployed common_utils.sh library"
+    log_success "Deployed common_utils.sh + site_overlay.sh libraries"
   fi
 
   # 4. Bind to cron

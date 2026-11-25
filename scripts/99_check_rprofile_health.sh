@@ -136,8 +136,14 @@ TEMPLATE_DIR="${WORKSPACE_ROOT}/templates/Rprofile_site.d"
 # Login script deployed by 20_configure_rstudio.sh (menu 1/3). Its path is
 # defined once in configure_rstudio.vars.conf.
 LOGIN_SCRIPT_PATH="/etc/profile.d/00_rstudio_user_logins.sh"
-if [[ -r "$RSTUDIO_VARS_CONF" ]]; then
-    _lsp="$(grep -m1 -E '^RSTUDIO_PROFILE_SCRIPT_PATH=' "$RSTUDIO_VARS_CONF" | cut -d= -f2- | tr -d '"' || true)"
+if [[ -r "$RSTUDIO_VARS_CONF" && -r "${WORKSPACE_ROOT}/lib/site_overlay.sh" ]]; then
+    # Effective value, site overlay included (ADR-0011)
+    # shellcheck source=../lib/site_overlay.sh disable=SC1091
+    source "${WORKSPACE_ROOT}/lib/site_overlay.sh"
+    if ! _lsp="$(site_overlay_get "$RSTUDIO_VARS_CONF" RSTUDIO_PROFILE_SCRIPT_PATH)"; then
+        printf '[FAIL] cannot source %s or its site overlay (syntax error?): fix it and re-run\n' "$RSTUDIO_VARS_CONF" >&2
+        exit 1
+    fi
     if [[ -n "$_lsp" ]]; then LOGIN_SCRIPT_PATH="$_lsp"; fi
 fi
 LOGIN_SCRIPT="${BIOME_HEALTH_ROOT}${LOGIN_SCRIPT_PATH}"

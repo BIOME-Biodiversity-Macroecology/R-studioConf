@@ -550,8 +550,8 @@ install_and_configure_nginx() {
     log ERROR "Config file not found: $config_file"
     return 1
   fi
-  # shellcheck source=../config/install_nginx.vars.conf disable=SC1091
-  source "$config_file"
+  # Committed file, then config/site/install_nginx.site.vars.conf (ADR-0011)
+  site_overlay_source "$config_file"
   
   # Use the flag set by menu choice
   if [[ "${enable_autodetect:-false}" == "true" ]]; then
@@ -727,7 +727,13 @@ install_and_configure_nginx() {
   local rsession_timeout_minutes=10080 # Default 7 days
   if [[ -f "$rstudio_vars_file" ]]; then
     local extracted_timeout
-    extracted_timeout=$(grep -E '^[[:space:]]*RSESSION_TIMEOUT_MINUTES=' "$rstudio_vars_file" | cut -d= -f2- | tr -d '"'\''[:space:]')
+    # Effective value, site overlay included (ADR-0011)
+    # A config that cannot be sourced stops the deploy: never a silent default.
+    if ! extracted_timeout="$(site_overlay_get "$rstudio_vars_file" RSESSION_TIMEOUT_MINUTES)"; then
+      log "ERROR" "Cannot source ${rstudio_vars_file} or its site overlay (syntax error?): fix it and re-run."
+      exit 1
+    fi
+    extracted_timeout="$(tr -d '[:space:]' <<<"$extracted_timeout")"
     if [[ -n "$extracted_timeout" && "$extracted_timeout" =~ ^[0-9]+$ ]]; then
       rsession_timeout_minutes="$extracted_timeout"
     fi

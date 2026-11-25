@@ -79,6 +79,7 @@ Descriptions state each file's role. They do not imply that every document has p
 
 - [`OPERATOR_QUICKSTART.md`](operations/OPERATOR_QUICKSTART.md) — day-2 quick reference.
 - [`MAINTENANCE.md`](operations/MAINTENANCE.md) — periodic maintenance schedule and procedures.
+- [`CONFIG_SITE_OVERLAY.md`](operations/CONFIG_SITE_OVERLAY.md) — move host values out of tracked `config/*.vars.conf` into `config/site/` so `git pull --ff-only` works (ADR-0011).
 - [`HOTFIX_REGISTER.md`](operations/HOTFIX_REGISTER.md) — in-place hotfixes, the release that absorbs each, and what each host runs (ADR-0006).
 - [`DEVOPS_TROUBLESHOOTING_GUIDE.md`](operations/DEVOPS_TROUBLESHOOTING_GUIDE.md) — troubleshooting method: layered triage, reference values and thresholds, tool kit, worked example (suspended-session incident, 2026-10-28).
 - [`TROUBLESHOOTING.md`](operations/TROUBLESHOOTING.md) — symptom-indexed troubleshooting.

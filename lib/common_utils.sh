@@ -217,6 +217,16 @@ handle_error() {
     log "ERROR" "An error occurred: ${message} (Exit Code: ${exit_code})"
 }
 
+# ── Site overlay for committed config/<name>.vars.conf (ADR-0011) ──
+# site_overlay_source / site_overlay_get / site_overlay_render: see lib/site_overlay.sh.
+# 50_setup_nodes.sh deploys both files to ${BIOME_CONF}/script/. A copy of this
+# file without its neighbour (an older deploy) still loads; only the
+# site_overlay_* functions are then missing, and a caller of those fails loudly.
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/site_overlay.sh" ]]; then
+    # shellcheck source=site_overlay.sh disable=SC1091
+    source "$(dirname "${BASH_SOURCE[0]}")/site_overlay.sh"
+fi
+
 # ── Site-local config overlay (HC-12 pattern, see config/SITE_OVERRIDE.md) ──
 # Real, site-specific values live in config/site/ (gitignored, never committed).
 # The repo ships sanitized <name>.example templates carrying the __FILL_ME__
