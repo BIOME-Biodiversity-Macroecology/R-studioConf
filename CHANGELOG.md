@@ -8,6 +8,18 @@ R-runtime profile changes have their own log: [`docs/reference/Rprofile_site.CHA
 New entries go here; they move into a release section when the release is
 tagged (process: [ADR-0006](docs/adr/0006-versioned-releases-and-hotfix-register.md)).
 
+### Documentation (package sync rollout lessons)
+
+- `docs/operations/PKG_SYNC.md`: version alignment and
+  `PKG_SYNC_ACCEPT_PARTIAL_ROLLBACK` (why r2u forces the choice, what a rollback
+  still restores); check that the host checkout is on `main` before switching to
+  `apply` (calc03 was 37 commits behind on 2026-11-17); morning check with
+  `journalctl --since today`; the lock warning `another sync run is active`;
+  why "packages differing in version" rises until every host is in `apply`;
+  a host whose sessions run all night defers every slot (`--force-window`
+  does not bypass the session check); rollout state on 2026-11-25
+  (missing 725 -> 27, versions differing 44).
+
 ### Added (user e-mail from Active Directory, ADR-0010)
 
 - `templates/orphan_cleanup_helpers.sh.template`: `resolve_user_email_source`

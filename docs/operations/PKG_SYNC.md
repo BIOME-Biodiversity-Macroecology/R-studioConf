@@ -20,6 +20,7 @@ never removes a package and never changes R itself.
 | sessions running | exit 75 ("deferred"), the next slot retries (log: `retry at HH:MM`) |
 | still busy at 04:45 | exit 75, log `last slot tonight, the sync moves to the next night` |
 | after 05:00 | nothing starts; the next night runs (a missed night is not caught up) |
+| an earlier slot still running | log `WARN another sync run is active: exiting`, exit 0; the next slot takes over. Harmless: the lock (`flock`) keeps two runs from overlapping |
 
 The window is in `config/pkg_sync.vars.conf` (`PKG_SYNC_WINDOW_START=0300`,
 `PKG_SYNC_APPLY_FROM=0330`, `PKG_SYNC_WINDOW_END=0500`). A run started at 04:45
@@ -28,6 +29,25 @@ can end after 05:00; at most 50 binary installs keep it short.
 Refusals (exit 3, host unchanged): R not at the pinned version
 (`config/pin_r_version.vars.conf`), a plan that removes packages, touches
 `r-base*`/`r-recommended`, or upgrades a package without a saved `.deb`.
+
+### Version alignment and partial rollback
+
+The repository (r2u) keeps only the current build of most packages, so the old
+`.deb` of a package about to be upgraded often cannot be downloaded again. By
+default (`PKG_SYNC_ACCEPT_PARTIAL_ROLLBACK=false`) the alignment then refuses
+the whole plan: the report reads `version_alignment: refused, unchanged`, and
+only missing packages are installed. On calc04, 152 upgrades were refused this
+way on 2026-11-16.
+
+With `PKG_SYNC_ACCEPT_PARTIAL_ROLLBACK=true` in the host's site file, those
+upgrades go ahead. The trade-off: `--rollback` of the alignment restores only the
+packages whose old `.deb` was saved; the others stay at the new version. Set it
+per host, after the host passed one night in `apply` without it:
+
+```bash
+grep -q '^PKG_SYNC_ACCEPT_PARTIAL_ROLLBACK=' config/site/pkg_sync.site.vars.conf \
+  || echo 'PKG_SYNC_ACCEPT_PARTIAL_ROLLBACK=true' | sudo tee -a config/site/pkg_sync.site.vars.conf
+```
 
 ## One-time setup
 
@@ -138,16 +158,24 @@ calc03 is on the pinned R since the same day.
    `dry-run` (or `deferred` when sessions ran past 04:45), and the planned
    packages make sense (no package you would not want on every host; exclude
    it in `policy.json` otherwise, see below).
-2. **calc04 (test host) to `apply`**, the evening before:
+2. **calc04 (test host) to `apply`**, the evening before. First check that the
+   host checkout is on the current `main`: the timer runs the script from the
+   checkout, so an old checkout runs old code. On 2026-11-17 calc03 was 37
+   commits behind and its plan still failed on the `awk` bug fixed in PR #62.
 
    ```bash
+   cd /home/ladmin/configServices/R-studioConf
+   git fetch origin && git status -sb      # must not show [behind N]
+   git pull --ff-only                      # if behind; it refuses if a locally modified file changed upstream
    sudo sed -i 's/^PKG_SYNC_MODE=.*/PKG_SYNC_MODE="apply"/' config/site/pkg_sync.site.vars.conf
    sudo bash scripts/biome_pkg_sync.sh --plan    # what tonight will do, changes nothing
    ```
 
-   The next morning on calc04:
+   The next morning on calc04 (the run is after midnight, so use `--since today`
+   and not a window counted back from the afternoon):
 
    ```bash
+   sudo journalctl -u biome-pkg-sync --since today | grep -iE "result:|error|refused|WARN"
    sudo jq '{status, note, version_alignment, backup}' /var/lib/biome-pkg-sync/last_report.json
    sudo cat "$(sudo jq -r .backup /var/lib/biome-pkg-sync/last_report.json)/align_backup"  # alignment backup dir
    bash scripts/biome_pkg_sync.sh --status       # calc04 MISSING should have dropped
@@ -173,7 +201,13 @@ calc03 is on the pinned R since the same day.
    `sudo bash scripts/biome_pkg_sync.sh --remove-timer`.
 
 Metric: `--status` prints packages that differ in version, the sum of missing
-packages and the number of R versions. Target 0 / 0 / 1. Baseline 2026-10-15
+packages and the number of R versions. Target 0 / 0 / 1.
+
+During the rollout the packages that differ in version go **up**, and that is
+expected: the hosts in `apply` move to the current r2u builds (alignment and
+new installs), while the hosts still in `dry-run` keep their old versions. The
+number falls only when every host is in `apply`. A host's missing count can
+also rise for a night, when another host installed new dependencies. Baseline 2026-10-15
 (`99_check_pkg_host_drift.sh`): 426 of 690 packages drift.
 
 Baseline from `--status`, 2026-10-27 14:28 UTC, all hosts in dry-run, after the
@@ -189,6 +223,29 @@ calc03 R upgrade: 162 packages differ in version, 725 missing (sum over hosts),
 
 With `PKG_SYNC_MAX_NEW=50`, calc03 needs about six nights in `apply` to close
 its gap.
+
+State on 2026-11-25 (`--status` after the night): 44 packages differ in
+version, 27 missing, 1 R version (on 2026-11-19: 190, 281, 1; on 2026-10-27:
+162, 725).
+
+| Host | Mode | r-cran-* | missing | In `apply` since |
+|---|---|---|---|---|
+| biome-calc01 | apply, partial rollback (deferred every slot so far) | 682 | 27 | 2026-11-24 |
+| biome-calc02 | apply, partial rollback | 709 | 0 | 2026-11-19 |
+| biome-calc03 | apply, partial rollback | 709 | 0 | 2026-11-17 |
+| biome-calc04 | apply, partial rollback | 709 | 0 | 2026-11-16 |
+
+Every night that applied ended with `status: done`, alignment `done`, and
+0 packages failing to load (calc04 631/631 on 2026-11-17, calc03 648/648 on
+2026-11-19).
+
+A host where sessions stay open all night never applies: every slot from 03:30
+to 04:45 logs `result: deferred: N RStudio session(s), M R process(es) running`
+and the last one says `the sync moves to the next night`. `--force-window`
+does not skip this check; nothing installs while R runs. calc01 deferred all
+of 2026-11-25 with 4 sessions and 32 R processes. If that repeats, find who
+holds them (`ps -o user=,etime=,cmd= -C rsession`) and agree a free night with
+those users, or run `--force-window` by hand once they have closed.
 
 ## Manual run and rollback
 
