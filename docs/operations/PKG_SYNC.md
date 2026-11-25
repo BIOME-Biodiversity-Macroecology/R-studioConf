@@ -224,19 +224,28 @@ calc03 R upgrade: 162 packages differ in version, 725 missing (sum over hosts),
 With `PKG_SYNC_MAX_NEW=50`, calc03 needs about six nights in `apply` to close
 its gap.
 
-State on 2026-11-19 (`--status` after the night; all checkouts were brought to
-`main` on 2026-11-17): 190 packages differ in version, 281 missing, 1 R version.
+State on 2026-11-25 (`--status` after the night): 44 packages differ in
+version, 27 missing, 1 R version (on 2026-11-19: 190, 281, 1; on 2026-10-27:
+162, 725).
 
 | Host | Mode | r-cran-* | missing | In `apply` since |
 |---|---|---|---|---|
-| biome-calc01 | dry-run | 682 | 26 | next, after calc02 |
-| biome-calc02 | apply, partial rollback (first night 2026-11-20) | 513 | 195 | 2026-11-19 |
-| biome-calc03 | apply, partial rollback | 648 | 60 | 2026-11-17 |
-| biome-calc04 | apply, partial rollback | 708 | 0 | 2026-11-16 |
+| biome-calc01 | apply, partial rollback (deferred every slot so far) | 682 | 27 | 2026-11-24 |
+| biome-calc02 | apply, partial rollback | 709 | 0 | 2026-11-19 |
+| biome-calc03 | apply, partial rollback | 709 | 0 | 2026-11-17 |
+| biome-calc04 | apply, partial rollback | 709 | 0 | 2026-11-16 |
 
-Every night in `apply` so far ended with `status: done`, alignment `done`, and
+Every night that applied ended with `status: done`, alignment `done`, and
 0 packages failing to load (calc04 631/631 on 2026-11-17, calc03 648/648 on
 2026-11-19).
+
+A host where sessions stay open all night never applies: every slot from 03:30
+to 04:45 logs `result: deferred: N RStudio session(s), M R process(es) running`
+and the last one says `the sync moves to the next night`. `--force-window`
+does not skip this check; nothing installs while R runs. calc01 deferred all
+of 2026-11-25 with 4 sessions and 32 R processes. If that repeats, find who
+holds them (`ps -o user=,etime=,cmd= -C rsession`) and agree a free night with
+those users, or run `--force-window` by hand once they have closed.
 
 ## Manual run and rollback
 
